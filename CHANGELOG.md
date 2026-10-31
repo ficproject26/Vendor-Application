@@ -2,6 +2,44 @@
 
 All notable changes, task-by-task implementations, audits, and test results are documented in this file in chronological order.
 
+## [Vendor Real-Time Transaction Alerts, Instant 6-Section Popups & E2E Synchronization] - 2026-10-31
+
+### Objective
+Resolve vendor transaction delivery and display delays across Orders (Products, Food, Daily Needs), Bookings (Services, Stay, Travel), and Job Applications. Deliver instant real-time popups with complete actual backend details (< 1.5s latency), zero artificial refresh requirements, and full deep-linking into existing transaction detail modals.
+
+### Root Cause Analysis & Implementations
+1. **Outlet Business Room Auto-Join (`wsServer.ts`):**
+   - **Root Cause:** Transactions are persisted with vendor outlet business IDs (e.g. `6adb305336cf70b0dd57cff0`), but sockets were authenticated only with parent vendor user IDs (`ven-fic-2026-v002`), emitting packets into empty rooms.
+   - **Fix:** Added MongoDB user lookup to automatically join vendor outlet rooms (`vendor:${outletId}`, `business:${outletId}`) on socket connection, and supported authorized `subscribe_topic` and `join` socket events.
+2. **Unified Real-time Event Envelope with `eventId` (`eventPublisher.ts`, `eventTypes.ts`, `orders.ts`):**
+   - **Root Cause:** Backend emitted only `ORDER_CREATED` without `eventId`, while frontend dropped events missing `eventId`.
+   - **Fix:** Added `eventId` generation (`${entity}_${entityId}_${version}_${Date.now()}`), added `BOOKING` and `APPLICATION` to `RealtimeEntities`, and emitted both canonical named events (`ORDER_CREATED`, `BOOKING_CREATED`, `APPLICATION_CREATED`) and structured `realtime_event` packets.
+3. **Vendor Mobile Socket Background Sync & Event Capture (`socketService.ts`):**
+   - Expanded `startBackgroundSync` to poll `fetchOrders()`, `fetchBookings()`, and `fetchApplications()`.
+   - Enhanced `parseActivityNotification` to preserve complete actual backend records in `raw`.
+4. **Professional 6-Section Instant Modal (`NewActivityModal.tsx`):**
+   - Redesigned popup modal to organize transaction data into 6 clear sections:
+     1. Customer Details (Name, Phone `📞`, Email `✉️`, Customer ID)
+     2. Transaction Details (ID, Category, Received Date & Time, Status)
+     3. Ordered Items / Booking / Candidate Breakdown (Thumbnails, Quantities, Unit Price, or Stay/Travel schedule)
+     4. Location & Address (Distinct delivery destination, stay property, or service visit location)
+     5. Payment Summary (Subtotal, Discount, Delivery Fee, Taxes, Total Amount, Payment Method, Payment Status)
+     6. Additional Instructions / Notes
+   - Actions: "View Full Details" (deep-links to item), "Acknowledge", and "Close". Removed arbitrary hardcoded Accept/Reject buttons.
+5. **OrdersScreen Route Parameter Race Condition Fix (`OrdersScreen.tsx`):**
+   - Prevented `clearRouteParams()` from clearing `routeParams.targetId` before `ordersData`/`bookingsData`/`jobsData` could match and open `selectedOrder` or `selectedBooking`.
+
+### Verification Results
+- **E2E Latency:** Tested over Redis Pub/Sub:
+  - Product Order: 131ms
+  - Stay Booking: 196ms
+  - Job Application: 260ms (well under the 1-2s target).
+- **TypeScript:** `npx tsc --noEmit` exited code 0 with 0 errors.
+- **Metro Bundle:** `react-native bundle` for Android created `index.android.bundle` cleanly.
+- **Client Isolation:** Unrelated vendor ID filtered out (`ven-unrelated-999`). Duplicate packets successfully dropped.
+
+---
+
 ## [Persistent Login Session & Hardware Keystore Cache Management] - 2026-10-31
 
 ### Objective

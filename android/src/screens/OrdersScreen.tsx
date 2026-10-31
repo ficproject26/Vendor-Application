@@ -373,7 +373,8 @@ export default function OrdersScreen({
     if (routeParams?.segment) {
       setActiveSegment(routeParams.segment);
       setActiveFilter('All');
-      if (clearRouteParams) {
+      // Only clear if no targetId is pending; if targetId is present, the target matcher effect will clear it upon finding and opening the item
+      if (!routeParams.targetId && clearRouteParams) {
         clearRouteParams();
       }
     }

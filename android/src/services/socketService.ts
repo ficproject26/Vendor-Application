@@ -1,6 +1,6 @@
 import { io, Socket } from 'socket.io-client';
 import { Platform } from 'react-native';
-import { getToken, getVendorUser, fetchOrders, getWorkingSocketUrl } from './apiService';
+import { getToken, getVendorUser, fetchOrders, fetchBookings, fetchApplications, getWorkingSocketUrl } from './apiService';
 import { soundNotificationService } from './soundNotificationService';
 import { SOCKET_URL_ANDROID, SOCKET_URL_IOS } from './env';
 import { VendorActivityNotification } from '../components/NotificationBanner';
@@ -308,35 +308,51 @@ class VendorSocketService {
   }
 
   /**
-   * Periodic background check as resilient fallback
+   * Periodic background check as resilient fallback across Orders, Bookings & Applications
    */
   private startBackgroundSync() {
     if (this.pollInterval) clearInterval(this.pollInterval);
 
     // Seed on first run if not already done
     if (!this.isInitialSeeded) {
-      fetchOrders().then((orders) => {
-        if (Array.isArray(orders)) {
-          this.seedInitialOrders(orders);
-        }
-      }).catch(() => {});
+      Promise.allSettled([fetchOrders(), fetchBookings(), fetchApplications()])
+        .then(([ordRes, bkgRes, appRes]) => {
+          const allItems: any[] = [];
+          if (ordRes.status === 'fulfilled' && Array.isArray(ordRes.value)) allItems.push(...ordRes.value);
+          if (bkgRes.status === 'fulfilled' && Array.isArray(bkgRes.value)) allItems.push(...bkgRes.value);
+          if (appRes.status === 'fulfilled' && Array.isArray(appRes.value)) allItems.push(...appRes.value);
+          if (allItems.length > 0) {
+            this.seedInitialOrders(allItems);
+          }
+        })
+        .catch(() => {});
     }
 
     this.pollInterval = setInterval(async () => {
       try {
-        const latestOrders = await fetchOrders();
-        if (Array.isArray(latestOrders) && latestOrders.length > 0) {
+        const [ordRes, bkgRes, appRes] = await Promise.allSettled([
+          fetchOrders(),
+          fetchBookings(),
+          fetchApplications()
+        ]);
+
+        const allLatest: any[] = [];
+        if (ordRes.status === 'fulfilled' && Array.isArray(ordRes.value)) allLatest.push(...ordRes.value);
+        if (bkgRes.status === 'fulfilled' && Array.isArray(bkgRes.value)) allLatest.push(...bkgRes.value);
+        if (appRes.status === 'fulfilled' && Array.isArray(appRes.value)) allLatest.push(...appRes.value);
+
+        if (allLatest.length > 0) {
           if (!this.isInitialSeeded) {
-            this.seedInitialOrders(latestOrders);
+            this.seedInitialOrders(allLatest);
             return;
           }
 
-          // Check for any order not yet processed
-          for (const ord of latestOrders) {
-            const oid = (ord._id || ord.id || ord.order_number || '').toString();
-            const onum = (ord.order_number || '').toString();
-            if (oid && !this.processedOrderIds.has(oid) && (!onum || !this.processedOrderIds.has(onum))) {
-              this.processNewItem(ord);
+          // Check for any item not yet processed
+          for (const item of allLatest) {
+            const oid = (item._id || item.id || item.order_number || item.applicationId || '').toString();
+            const onum = (item.order_number || '').toString();
+            if ((oid && !this.processedOrderIds.has(oid)) || (onum && !this.processedOrderIds.has(onum))) {
+              this.processNewItem(item);
             }
           }
         }
