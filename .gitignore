@@ -76,3 +76,6 @@ yarn-error.log
 
 dist/
 *.apk
+
+AGENT.md
+CHANGELOG.md
