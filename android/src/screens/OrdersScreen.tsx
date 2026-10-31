@@ -282,6 +282,7 @@ export default function OrdersScreen({
   const insets = useSafeAreaInsets();
   const [activeSegment, setActiveSegment] = useState<'Orders' | 'Bookings' | 'Jobs'>('Orders');
   const [activeFilter, setActiveFilter] = useState<any>('All');
+  const [bookingCategoryFilter, setBookingCategoryFilter] = useState<'All' | 'Services' | 'Stay' | 'Travel'>('All');
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [selectedBooking, setSelectedBooking] = useState<Booking | null>(null);
   const [searchVisible, setSearchVisible] = useState(false);
@@ -753,7 +754,10 @@ export default function OrdersScreen({
 
   const isJobItem = (o: any) => {
     if (!o) return false;
-    const cat = String(o.category || '').toLowerCase();
+    const cat = String(o.category || o.type || '').toLowerCase();
+    if (['services', 'service', 'stay', 'travel', 'travels', 'products', 'food', 'daily needs'].includes(cat)) {
+      if (!o.jobId && !o.applicationId && !cat.includes('job')) return false;
+    }
     const orderNum = String(o.order_number || o.id || o.rawOrder?.order_number || '');
     const id = String(o.id || o._id || '');
     return Boolean(
@@ -762,10 +766,8 @@ export default function OrdersScreen({
       orderNum.startsWith('JOB') ||
       orderNum.includes('JOB-') ||
       id.startsWith('ord_job') ||
-      o.candidateEmail ||
-      o.candidateResume ||
-      o.candidateEducation ||
-      o.applicant_education ||
+      (o.jobId || o.applicationId) ||
+      (o.candidateResume && String(o.candidateResume).trim() !== '' && o.candidateResume !== 'null') ||
       o.resume_name ||
       o.application_status ||
       String(o.customerAddress || o.customer_address || '').includes('Resume:') ||
@@ -1163,9 +1165,15 @@ export default function OrdersScreen({
 
   const filteredBookings = bookingsData
     .filter(b => {
+      if (bookingCategoryFilter !== 'All' && b.bookingCategory !== bookingCategoryFilter) {
+        return false;
+      }
       if (activeFilter === 'All') return true;
       if (activeFilter === 'Pending') {
         return ['Pending', 'Order Received', 'Placed', 'New'].includes(b.status);
+      }
+      if (activeFilter === 'Confirmed') {
+        return ['Confirmed', 'Accepted', 'Approved', 'Checked In'].includes(b.status);
       }
       if (activeFilter === 'Preparing' || activeFilter === 'Assigned') {
         return ['Accepted', 'Preparing', 'Confirmed', 'Processing', 'Assigned'].includes(b.status);
@@ -1343,6 +1351,37 @@ export default function OrdersScreen({
             </Text>
           </TouchableOpacity>
         </View>
+
+        {/* Booking Category Pills (Services, Stay, Travel) */}
+        {activeSegment === 'Bookings' && (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={tw`mb-2.5`}>
+            {(['All', 'Services', 'Stay', 'Travel'] as const).map(cat => (
+              <TouchableOpacity
+                key={cat}
+                onPress={() => setBookingCategoryFilter(cat)}
+                style={[
+                  tw`mr-2 px-3.5 py-1.5 rounded-xl border`,
+                  bookingCategoryFilter === cat
+                    ? { backgroundColor: '#4F46E5', borderColor: '#4F46E5' }
+                    : isDark
+                    ? [tw`bg-zinc-800/80`, { borderColor: '#3F3F46' }]
+                    : [tw`bg-gray-100`, { borderColor: '#E5E7EB' }],
+                ]}>
+                <Text
+                  style={[
+                    tw`text-xs font-bold`,
+                    bookingCategoryFilter === cat
+                      ? tw`text-white`
+                      : isDark
+                      ? tw`text-zinc-300`
+                      : tw`text-gray-700`,
+                  ]}>
+                  {cat === 'All' ? 'All Bookings' : cat}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        )}
 
         {/* Status Filters */}
         <ScrollView horizontal showsHorizontalScrollIndicator={false}>
