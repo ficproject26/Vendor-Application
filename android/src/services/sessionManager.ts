@@ -13,6 +13,7 @@ export interface SessionValidationResult {
   valid: boolean;
   user?: any;
   isOffline?: boolean;
+  isSuspended?: boolean;
   reason?: string;
 }
 
@@ -126,7 +127,10 @@ class SessionManager {
       const data = await response.json().catch(() => null);
 
       if (response.ok && data?.success && data?.user) {
-        return { valid: true, user: data.user };
+        const u = data.user;
+        const vStatus = (u.status || u.vendorStatus || '').toString().toLowerCase().trim();
+        const isSuspended = ['suspended', 'inactive', 'banned'].includes(vStatus) || u.isSuspended === true || u.isLocked === true;
+        return { valid: true, user: u, isSuspended };
       }
 
       if (response.status === 401 || response.status === 403) {
@@ -206,7 +210,36 @@ class SessionManager {
       }
     } catch {}
   }
+
+  /**
+   * Persist user selected theme mode ('light' | 'dark' | 'system')
+   */
+  async saveThemePreference(theme: string): Promise<void> {
+    try {
+      if (SecureAuthStorage?.saveCacheData) {
+        await SecureAuthStorage.saveCacheData('app_theme_mode', theme);
+      } else {
+        memoryCache.set('app_theme_mode', theme);
+      }
+    } catch {}
+  }
+
+  /**
+   * Retrieve saved theme mode
+   */
+  async loadThemePreference(): Promise<string | null> {
+    try {
+      if (SecureAuthStorage?.getCacheData) {
+        const val = await SecureAuthStorage.getCacheData('app_theme_mode');
+        return val || null;
+      }
+      return memoryCache.get('app_theme_mode') || null;
+    } catch {
+      return null;
+    }
+  }
 }
 
 export const sessionManager = new SessionManager();
+export default sessionManager;
 

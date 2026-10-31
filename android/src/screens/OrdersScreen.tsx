@@ -90,6 +90,8 @@ interface Booking {
   // Service fields
   serviceDate?: string;
   serviceTime?: string;
+  packageName?: string;
+  serviceLocation?: string;
   rawOrder?: any;
   isBusBooking?: boolean;
 }
@@ -838,7 +840,31 @@ export default function OrdersScreen({
 
         const travelers = Array.isArray(o.travelers) ? o.travelers : [];
         const primaryPassenger = travelers[0]?.name || o.memberName || o.customer_name || o.bookingHolder?.name || 'Customer';
-        const displayServiceName = isBus && o.bus_name ? o.bus_name : (o.items && o.items.length > 0 ? o.items.map((i: any) => i.name).join(', ') : (o.product_details || o.serviceName || 'Service Booking'));
+
+        // Precise Service Name and Package resolution
+        const GENERIC_CATS = ['electrical & solar services', 'electrical & solar', 'electrical services', 'plumbing services', 'services', 'service', 'general service', 'daily needs', 'products'];
+        let resolvedServiceName = o.serviceName;
+        let resolvedPackageName = o.packageName || (o.items && o.items[0]?.variant);
+
+        if (isBus && o.bus_name) {
+          resolvedServiceName = o.bus_name;
+        } else if (!resolvedServiceName || GENERIC_CATS.includes(String(resolvedServiceName).trim().toLowerCase())) {
+          const candidate = (o.items && o.items[0]?.name) || o.product_details || o.name || '';
+          const m = candidate.match(/^([^(•·\n\r]+)(?:\(([^)]+)\))?/);
+          if (m) {
+            resolvedServiceName = m[1].trim();
+            if (!resolvedPackageName && m[2]) resolvedPackageName = m[2].split(/[•·]/)[0].trim();
+          } else {
+            resolvedServiceName = candidate || 'Service Booking';
+          }
+        } else if (String(resolvedServiceName).includes('(')) {
+          const m = String(resolvedServiceName).match(/^([^(]+)(?:\(([^)]+)\))?/);
+          if (m) {
+            resolvedServiceName = m[1].trim();
+            if (!resolvedPackageName && m[2]) resolvedPackageName = m[2].trim();
+          }
+        }
+
         const custPhone = o.bookingHolder?.phone || o.customerPhone || o.customer_phone || o.phone || o.memberPhone || '';
         const payStatus = o.paymentStatus || o.payment_status || (['Completed', 'Delivered', 'Checked Out'].includes(o.status) ? 'Paid' : 'Pending');
 
@@ -859,24 +885,52 @@ export default function OrdersScreen({
         const dTime = o.departureTime || o.appointmentTimeSlot || o.timeSlot || o.time || 'Not provided';
         const passCount = travelers.length > 0 ? travelers.length : Number(o.passengers || o.passengerCount || o.totalGuests || 1);
 
-        // Service properties
-        const sDate = o.appointmentDate || o.serviceDate || o.date || (o.createdAt ? new Date(o.createdAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : 'Not provided');
-        const sTime = o.appointmentTimeSlot || o.timeSlot || o.time || 'Standard Slot';
+        // Service properties - robust schedule extraction
+        let sDate = o.serviceDate || o.appointmentDate || o.bookingDate || o.date;
+        let sTime = o.serviceTime || o.appointmentTimeSlot || o.timeSlot || o.time;
+
+        if ((!sDate || sDate === 'Not provided' || !sTime || sTime === 'Standard Slot') && o.appointment_slot) {
+          if (o.appointment_slot.includes(' at ')) {
+            const [dp, tp] = o.appointment_slot.split(' at ');
+            if (!sDate || sDate === 'Not provided') sDate = dp.trim();
+            if (!sTime || sTime === 'Standard Slot') sTime = tp.trim();
+          } else if (!sDate || sDate === 'Not provided') {
+            sDate = o.appointment_slot;
+          }
+        }
+
+        if ((!sDate || sDate === 'Not provided' || !sTime || sTime === 'Standard Slot') && o.product_details) {
+          const m = String(o.product_details).match(/[•·]\s*([A-Za-z0-9,\s]+?)\s+at\s+([0-9:AMPMapm\s]+)/);
+          if (m) {
+            if (!sDate || sDate === 'Not provided') sDate = m[1].trim();
+            if (!sTime || sTime === 'Standard Slot') sTime = m[2].trim();
+          }
+        }
+
+        const finalServiceDate = (sDate && sDate !== 'Not provided') ? sDate : (o.createdAt ? new Date(o.createdAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : 'On-Demand Service');
+        const finalServiceTime = (sTime && sTime !== 'Standard Slot') ? sTime : 'On-Demand / Flexible';
+
+        const rawAddr = o.serviceLocation || o.customerAddress || o.customer_address || o.bookingHolder?.address || o.address || '';
+        const cleanLocation = (rawAddr && rawAddr !== 'Not provided' && !rawAddr.includes('N/A (')) ? rawAddr : '';
 
         return {
           id: o.order_number || o.id || o._id,
           dbId: o._id || o.id,
           customer: primaryPassenger,
-          serviceName: displayServiceName,
-          dateTime: o.appointment_slot || (o.appointmentDate ? `${o.appointmentDate} at ${o.appointmentTimeSlot || ''}` : (o.createdAt ? new Date(o.createdAt).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true }) : 'Just now')),
+          serviceName: resolvedServiceName || 'Service Booking',
+          packageName: resolvedPackageName || '',
+          dateTime: o.appointment_slot || (finalServiceDate ? `${finalServiceDate} at ${finalServiceTime}` : (o.createdAt ? new Date(o.createdAt).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true }) : 'Just now')),
           amount: `₹${Number(o.finalAmount ?? o.totalAmount ?? o.amount ?? 0).toLocaleString('en-IN')}`,
           status: o.status || 'Pending',
           paymentStatus: payStatus,
           paymentMethod: o.paymentMethod || o.payment_method || '',
           phone: custPhone,
-          customerAddress: o.customerAddress || o.customer_address || '',
+          customerAddress: cleanLocation || o.customerAddress || o.customer_address || '',
+          serviceLocation: cleanLocation,
           category: o.category || (isStay ? 'Stay' : isTravel ? 'Travel' : 'Services'),
           bookingCategory: bookingCat,
+          serviceDate: finalServiceDate,
+          serviceTime: finalServiceTime,
           // Stay fields
           propertyName: propName,
           roomName: roomName,
@@ -892,9 +946,6 @@ export default function OrdersScreen({
           travelDate: tDate,
           departureTime: dTime,
           passengerCount: passCount,
-          // Service fields
-          serviceDate: sDate,
-          serviceTime: sTime,
           rawOrder: o,
           isBusBooking: isBus,
         };
@@ -1864,7 +1915,14 @@ export default function OrdersScreen({
                     <Text style={[tw`text-base font-extrabold`, isDark ? tw`text-white` : tw`text-gray-900`]}>
                       {booking.serviceName}
                     </Text>
-                    <Text style={[tw`text-xs mt-0.5`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
+                    {booking.packageName ? (
+                      <View style={[tw`mt-1 self-start px-2 py-0.5 rounded-md`, isDark ? tw`bg-teal-950/70` : tw`bg-teal-50`]}>
+                        <Text style={tw`text-[10px] font-bold text-teal-700 dark:text-teal-400`}>
+                          📦 {booking.packageName}
+                        </Text>
+                      </View>
+                    ) : null}
+                    <Text style={[tw`text-xs mt-1`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
                       Booking ID: <Text style={tw`font-mono font-bold text-teal-600 dark:text-teal-400`}>#{booking.id}</Text>
                     </Text>
                   </View>
@@ -1902,6 +1960,16 @@ export default function OrdersScreen({
                       </View>
                     ) : null}
                   </View>
+
+                  {/* Service Execution Location / Address */}
+                  {(booking.serviceLocation || booking.customerAddress) ? (
+                    <View style={[tw`p-2.5 rounded-xl mb-2.5 flex-row items-start`, isDark ? tw`bg-zinc-800/40` : tw`bg-teal-50/40`]}>
+                      <MapPin size={13} color="#0D9488" style={tw`mr-1.5 mt-0.5 shrink-0`} />
+                      <Text style={[tw`text-xs flex-1 font-semibold`, isDark ? tw`text-zinc-300` : tw`text-teal-900`]} numberOfLines={2}>
+                        {booking.serviceLocation || booking.customerAddress}
+                      </Text>
+                    </View>
+                  ) : null}
 
                   {/* Footer Row */}
                   <View style={[tw`flex-row items-center justify-between pt-2.5 border-t`, isDark ? tw`border-zinc-800` : tw`border-gray-100`]}>

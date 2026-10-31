@@ -1,7 +1,7 @@
-import React, {useState, useEffect} from 'react';
+import React, {useState, useEffect, useRef, useCallback} from 'react';
 import {View, Text, TouchableOpacity, useColorScheme, PermissionsAndroid, Platform} from 'react-native';
 import {SafeAreaProvider} from 'react-native-safe-area-context';
-import tw from 'twrnc';
+import tw, { useAppColorScheme } from 'twrnc';
 
 interface ErrorBoundaryProps {
   children: React.ReactNode;
@@ -67,6 +67,7 @@ import {
   Store,
   User,
   TrendingUp,
+  Landmark,
 } from 'lucide-react-native';
 
 // Screens
@@ -138,6 +139,19 @@ export interface BusinessItem {
   seatsLeft?: number;
   foodType?: string;
   preparationTime?: string;
+  offer?: {
+    title: string;
+    description?: string;
+    discountType: 'percentage' | 'fixed' | 'promotional';
+    discountValue: number;
+    originalPrice: number;
+    offerPrice: number;
+    startDate?: string;
+    endDate?: string;
+    startTime?: string;
+    endTime?: string;
+    isActive: boolean;
+  };
   jobType?: string;
   salaryPeriod?: string;
   experienceLevel?: string;
@@ -192,7 +206,8 @@ type Tab =
   | 'Subscriptions'
   | 'VendorPayments'
   | 'Queries'
-  | 'NotificationHistory';
+  | 'NotificationHistory'
+  | 'Analytics';
 type AuthScreen = 'login' | 'signup';
 
 function App() {
@@ -208,6 +223,37 @@ function App() {
   const isDark = themeMode === 'dark' || (themeMode === 'system' && systemScheme === 'dark');
   const [businessItems, setBusinessItems] = useState<BusinessItem[]>([]);
   const [purchasedTier, setPurchasedTier] = useState<'Silver' | 'Gold' | 'Diamond'>('Silver');
+
+  const [colorScheme, toggleColorScheme, setColorScheme] = useAppColorScheme(tw);
+
+  // Synchronize twrnc dark mode scheme dynamically
+  useEffect(() => {
+    setColorScheme(isDark ? 'dark' : 'light');
+  }, [isDark]);
+
+  // Restore persisted theme preference across app restarts
+  useEffect(() => {
+    sessionManager.loadThemePreference().then((saved) => {
+      if (saved === 'light' || saved === 'dark' || saved === 'system') {
+        setThemeMode(saved);
+      }
+    }).catch(() => {});
+  }, []);
+
+  const isSuspended = Boolean(
+    currentUser?.isSuspended ||
+    currentUser?.isLocked ||
+    String(currentUser?.status || '').toLowerCase() === 'suspended' ||
+    String(currentUser?.approvalStatus || '').toLowerCase() === 'suspended'
+  );
+
+  const isPendingApproval = Boolean(
+    currentUser?.approvalStatus === 'PENDING_PINCODE_APPROVAL' ||
+    currentUser?.approvalStatus === 'PENDING_KYC_APPROVAL' ||
+    currentUser?.approvalStatus === 'PENDING_PAYMENT_APPROVAL' ||
+    String(currentUser?.status || '').toLowerCase() === 'pending' ||
+    String(currentUser?.status || '').toLowerCase() === 'pending pincode admin review'
+  );
 
   // Automatic persistent session restoration on app launch
   useEffect(() => {
@@ -306,13 +352,75 @@ function App() {
   const [modalNotification, setModalNotification] = useState<VendorActivityNotification | null>(null);
   const [isActivityModalVisible, setIsActivityModalVisible] = useState(false);
   const [isOrderActionProcessing, setIsOrderActionProcessing] = useState(false);
+  const [modalRemainingSeconds, setModalRemainingSeconds] = useState(15);
+  const modalTimerRef = useRef<any>(null);
+  const modalIntervalRef = useRef<any>(null);
+  const modalQueueRef = useRef<VendorActivityNotification[]>([]);
+
+  const clearModalTimers = useCallback(() => {
+    if (modalTimerRef.current) {
+      clearTimeout(modalTimerRef.current);
+      modalTimerRef.current = null;
+    }
+    if (modalIntervalRef.current) {
+      clearInterval(modalIntervalRef.current);
+      modalIntervalRef.current = null;
+    }
+  }, []);
+
+  const dismissCurrentModal = useCallback(() => {
+    clearModalTimers();
+    if (modalQueueRef.current && modalQueueRef.current.length > 0) {
+      const nextNotif = modalQueueRef.current.shift()!;
+      displayModalNotification(nextNotif);
+    } else {
+      setIsActivityModalVisible(false);
+      setModalNotification(null);
+      setModalRemainingSeconds(15);
+    }
+  }, [clearModalTimers]);
+
+  const displayModalNotification = useCallback((notif: VendorActivityNotification) => {
+    if (!notif) return;
+    clearModalTimers();
+    setModalNotification(notif);
+    setIsActivityModalVisible(true);
+    setModalRemainingSeconds(15);
+
+    // Exact 15-second auto-dismiss timer
+    modalTimerRef.current = setTimeout(() => {
+      dismissCurrentModal();
+    }, 15000);
+
+    // 1-second countdown interval
+    modalIntervalRef.current = setInterval(() => {
+      setModalRemainingSeconds((prev) => (prev > 1 ? prev - 1 : 1));
+    }, 1000);
+  }, [clearModalTimers, dismissCurrentModal]);
+
+  const enqueueOrDisplayModalNotification = useCallback((notif: VendorActivityNotification) => {
+    if (!notif) return;
+    const notifId = String(notif.id || notif.raw?.id || notif.raw?._id || notif.raw?.order_number || '');
+    if (isActivityModalVisible && modalNotification) {
+      const isAlreadyInQueue = modalQueueRef.current.some(it => {
+        const itId = String(it.id || it.raw?.id || it.raw?._id || it.raw?.order_number || '');
+        return itId && itId === notifId;
+      });
+      const isCurrentActive = String(modalNotification.id || modalNotification.raw?.id || modalNotification.raw?._id || modalNotification.raw?.order_number || '') === notifId;
+      if (!isAlreadyInQueue && !isCurrentActive) {
+        modalQueueRef.current.push(notif);
+      }
+    } else {
+      displayModalNotification(notif);
+    }
+  }, [isActivityModalVisible, modalNotification, displayModalNotification]);
 
   const handleAcceptOrder = async (notif: VendorActivityNotification) => {
     setIsOrderActionProcessing(true);
     try {
       const statusToSet = notif.category === 'Booking' ? 'Confirmed' : 'Accepted';
       await updateOrderStatus(notif.id, statusToSet);
-      setIsActivityModalVisible(false);
+      dismissCurrentModal();
       setActiveNotification(null);
       handleNavigate('Orders', { segment: notif.segment, targetId: notif.id });
     } catch (err: any) {
@@ -326,7 +434,7 @@ function App() {
     setIsOrderActionProcessing(true);
     try {
       await updateOrderStatus(notif.id, 'Cancelled');
-      setIsActivityModalVisible(false);
+      dismissCurrentModal();
       setActiveNotification(null);
     } catch (err: any) {
       console.warn('Failed to reject order:', err);
@@ -336,7 +444,7 @@ function App() {
   };
 
   const handleViewOrderDetails = (notif: VendorActivityNotification) => {
-    setIsActivityModalVisible(false);
+    dismissCurrentModal();
     setActiveNotification(null);
     handleNavigate('Orders', { segment: notif.segment, targetId: notif.id });
   };
@@ -412,18 +520,21 @@ function App() {
       const unsubscribe = socketService.onNotificationReceived((notif) => {
         console.log('📢 [App.tsx] Received notification:', notif?.id, notif?.category, notif?.title);
         setActiveNotification(notif);
-        setModalNotification(notif);
-        setIsActivityModalVisible(true);
+        enqueueOrDisplayModalNotification(notif);
       });
 
       return () => {
         unsubscribe();
+        clearModalTimers();
+        modalQueueRef.current = [];
       };
     } else {
       socketService.disconnect();
       setActiveNotification(null);
+      clearModalTimers();
+      modalQueueRef.current = [];
     }
-  }, [isLoggedIn]);
+  }, [isLoggedIn, enqueueOrDisplayModalNotification, clearModalTimers]);
 
   const handleNotificationPress = (notif: VendorActivityNotification) => {
     setActiveNotification(null);
@@ -504,10 +615,19 @@ function App() {
           </View>
         )}
 
-        {/* Payments / Analytics Screen */}
+        {/* Payments Screen (Sales & Settlements) */}
         {visitedTabs.has('Payments') && (
           <View style={[tw`flex-1`, activeTab === 'Payments' ? tw`flex` : tw`hidden`]}>
             <ScreenErrorBoundary screenName="Payments" onReset={() => setActiveTab('Home')}>
+              <VendorPaymentsScreen onNavigate={handleNavigate} isDark={isDark} />
+            </ScreenErrorBoundary>
+          </View>
+        )}
+
+        {/* Analytics Trends Screen */}
+        {activeTab === 'Analytics' && (
+          <View style={tw`flex-1`}>
+            <ScreenErrorBoundary screenName="Analytics" onReset={() => setActiveTab('Home')}>
               <PaymentsScreen isDark={isDark} />
             </ScreenErrorBoundary>
           </View>
@@ -591,7 +711,7 @@ function App() {
     {key: 'Home' as Tab, label: 'Home', icon: Home},
     {key: 'Orders' as Tab, label: 'Orders', icon: ClipboardList},
     {key: 'Business' as Tab, label: 'Business', icon: Store},
-    {key: 'Payments' as Tab, label: 'Analytics', icon: TrendingUp},
+    {key: 'Payments' as Tab, label: 'Payments', icon: Landmark},
     {key: 'Profile' as Tab, label: 'Profile', icon: User},
   ];
 
@@ -618,6 +738,50 @@ function App() {
           </View>
         ) : (
           <View style={[tw`flex-1`, isDark ? tw`bg-zinc-950` : tw`bg-gray-50`]}>
+            {/* Account Suspension Banner */}
+            {isSuspended && (
+              <View style={[tw`px-4 py-3 flex-row items-center justify-between border-b`, { backgroundColor: '#FEF2F2', borderColor: '#FCA5A5' }]}>
+                <View style={tw`flex-row items-center flex-1 mr-3`}>
+                  <View style={[tw`w-8 h-8 rounded-full items-center justify-center mr-2.5`, { backgroundColor: '#FEE2E2' }]}>
+                    <Text style={tw`text-red-600 font-black text-sm`}>⚠️</Text>
+                  </View>
+                  <View style={tw`flex-1`}>
+                    <Text style={tw`text-red-900 font-bold text-xs`}>Account Suspended by Administration</Text>
+                    <Text style={tw`text-red-700 text-[10px]`}>
+                      Store operations are restricted. Contact Support for review.
+                    </Text>
+                  </View>
+                </View>
+                <TouchableOpacity
+                  onPress={() => handleNavigate('Queries')}
+                  style={[tw`px-3 py-1.5 rounded-lg`, { backgroundColor: '#DC2626' }]}>
+                  <Text style={tw`text-white font-bold text-[10px]`}>Support</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {/* Account Pending Review Banner */}
+            {isPendingApproval && !isSuspended && (
+              <View style={[tw`px-4 py-3 flex-row items-center justify-between border-b`, { backgroundColor: '#FEF3C7', borderColor: '#FCD34D' }]}>
+                <View style={tw`flex-row items-center flex-1 mr-3`}>
+                  <View style={[tw`w-8 h-8 rounded-full items-center justify-center mr-2.5`, { backgroundColor: '#FDE68A' }]}>
+                    <Text style={tw`text-amber-800 font-black text-sm`}>⏳</Text>
+                  </View>
+                  <View style={tw`flex-1`}>
+                    <Text style={tw`text-amber-950 font-bold text-xs`}>Application Under Review (Sub Admin / KYC)</Text>
+                    <Text style={tw`text-amber-800 text-[10px]`}>
+                      Account is awaiting administrative verification. Feature access will unlock upon approval.
+                    </Text>
+                  </View>
+                </View>
+                <TouchableOpacity
+                  onPress={() => handleNavigate('Profile')}
+                  style={[tw`px-3 py-1.5 rounded-lg`, { backgroundColor: '#D97706' }]}>
+                  <Text style={tw`text-white font-bold text-[10px]`}>Status</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
             {/* Active Screen View */}
             <View style={tw`flex-1`}>
               {renderScreens()}
@@ -678,16 +842,18 @@ function App() {
               />
             )}
 
-            {/* Interactive Real-Time Activity Modal with Order Accept / Reject Actions */}
+            {/* Interactive Real-Time Activity Modal with Order Accept / Reject Actions & 15s Auto-Dismiss */}
             <NewActivityModal
               notification={modalNotification}
               visible={isActivityModalVisible}
               onAccept={handleAcceptOrder}
               onReject={handleRejectOrder}
               onViewDetails={handleViewOrderDetails}
-              onClose={() => setIsActivityModalVisible(false)}
+              onClose={dismissCurrentModal}
               isProcessing={isOrderActionProcessing}
               isDark={isDark}
+              remainingSeconds={modalRemainingSeconds}
+              queueCount={modalQueueRef.current.length}
             />
           </View>
         )}

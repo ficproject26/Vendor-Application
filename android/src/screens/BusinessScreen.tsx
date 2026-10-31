@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { launchCamera, launchImageLibrary } from 'react-native-image-picker';
-import { getVendorUser, setVendorUser, fetchProfile, fetchProducts, createProduct, updateProduct, deleteProduct, createBusiness, getActiveBusinessId, setActiveBusinessId, fetchAllBusinessesProducts, updateProfile, uploadImageToServer, normalizeCategory, fetchCategoryHierarchy, fetchMainCategories } from '../services/apiService';
+import { getVendorUser, setVendorUser, fetchProfile, fetchProducts, createProduct, updateProduct, deleteProduct, createBusiness, getActiveBusinessId, setActiveBusinessId, fetchAllBusinessesProducts, updateProfile, uploadImageToServer, normalizeCategory, fetchCategoryHierarchy, fetchMainCategories, applyListingOffer, removeListingOffer } from '../services/apiService';
 import {
   View,
   Text,
@@ -379,6 +379,56 @@ export default function BusinessScreen({
   const [newItemStock, setNewItemStock] = useState('10');
   const [newItemPinCode, setNewItemPinCode] = useState('');
   const [newItemIsActive, setNewItemIsActive] = useState(true);
+  const [newItemFoodType, setNewItemFoodType] = useState<'Veg' | 'Non-Veg'>('Veg');
+
+  // Offer Management State
+  const [isOfferModalVisible, setIsOfferModalVisible] = useState(false);
+  const [selectedOfferItem, setSelectedOfferItem] = useState<BusinessItem | null>(null);
+  const [offerTitle, setOfferTitle] = useState('Special Offer');
+  const [offerDescription, setOfferDescription] = useState('');
+  const [offerDiscountType, setOfferDiscountType] = useState<'percentage' | 'fixed' | 'promotional'>('percentage');
+  const [offerDiscountValue, setOfferDiscountValue] = useState('');
+  const [offerStartDate, setOfferStartDate] = useState('');
+  const [offerEndDate, setOfferEndDate] = useState('');
+  const [offerStartTime, setOfferStartTime] = useState('09:00');
+  const [offerEndTime, setOfferEndTime] = useState('21:00');
+  const [offerSubmitting, setOfferSubmitting] = useState(false);
+
+  const getOfferBasePrice = (item: BusinessItem | null): number => {
+    if (!item) return 0;
+    if (item.offer?.originalPrice && item.offer.originalPrice > 0) {
+      return item.offer.originalPrice;
+    }
+    const orig = item.originalPrice ? Number(String(item.originalPrice).replace(/[^\d]/g, '')) : 0;
+    if (orig > 0) return orig;
+    return Number(String(item.price).replace(/[^\d]/g, '')) || 0;
+  };
+
+  const calculateOfferFinalPrice = (
+    basePrice: number,
+    discountType: 'percentage' | 'fixed' | 'promotional',
+    valStr: string
+  ): { finalPrice: number; discountAmount: number; isValid: boolean; error?: string } => {
+    const val = parseFloat(valStr) || 0;
+    if (val <= 0) {
+      return { finalPrice: basePrice, discountAmount: 0, isValid: false, error: 'Enter a discount value greater than 0' };
+    }
+
+    if (discountType === 'percentage') {
+      if (val > 100) {
+        return { finalPrice: 0, discountAmount: basePrice, isValid: false, error: 'Percentage discount cannot exceed 100%' };
+      }
+      const discountAmount = Math.round((basePrice * val) / 100);
+      const finalPrice = Math.max(0, basePrice - discountAmount);
+      return { finalPrice, discountAmount, isValid: true };
+    } else {
+      if (val >= basePrice) {
+        return { finalPrice: 0, discountAmount: basePrice, isValid: false, error: 'Discount cannot be equal to or greater than base price' };
+      }
+      const finalPrice = Math.max(0, basePrice - val);
+      return { finalPrice, discountAmount: val, isValid: true };
+    }
+  };
   const [chosenImage, setChosenImage] = useState<string | null>(null);
   const [uploadedImageUrl, setUploadedImageUrl] = useState<string | null>(null);
   const [isUploadModalVisible, setIsUploadModalVisible] = useState(false);
@@ -619,13 +669,28 @@ export default function BusinessScreen({
 
   const safeItems = Array.isArray(items) ? items.filter(Boolean) : [];
 
+  const isJobItem = (i: BusinessItem) =>
+    i.category === 'Jobs' ||
+    (i as any).mainCategory === 'Jobs' ||
+    Boolean(i.jobType) ||
+    Boolean(i.salaryPackage) ||
+    Boolean(i.vacancies);
+
   const categories = categoriesConfig.map(cat => ({
     ...cat,
-    count: safeItems.filter(i => i && i.category === cat.key).length,
+    count: safeItems.filter(i => {
+      if (!i) return false;
+      if (cat.key === 'Jobs') return isJobItem(i);
+      return i.category === cat.key && !isJobItem(i);
+    }).length,
   }));
 
   const filteredItems = safeItems
-    .filter(i => i && i.category === activeCategory)
+    .filter(i => {
+      if (!i) return false;
+      if (activeCategory === 'Jobs') return isJobItem(i);
+      return (i.category === activeCategory || (i as any).mainCategory === activeCategory) && !isJobItem(i);
+    })
     .filter(i => {
       if (!searchQuery) return true;
       const q = searchQuery.toLowerCase();
@@ -640,6 +705,118 @@ export default function BusinessScreen({
         itType.includes(q)
       );
     });
+
+  const openOfferModal = (item: BusinessItem) => {
+    setSelectedOfferItem(item);
+    const todayStr = new Date().toISOString().split('T')[0];
+    const nextWeek = new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0];
+
+    if (item.offer && item.offer.isActive) {
+      setOfferTitle(item.offer.title || 'Special Offer');
+      setOfferDescription(item.offer.description || '');
+      setOfferDiscountType(item.offer.discountType || 'percentage');
+      setOfferDiscountValue(String(item.offer.discountValue || ''));
+      setOfferStartDate(item.offer.startDate || todayStr);
+      setOfferEndDate(item.offer.endDate || nextWeek);
+      setOfferStartTime(item.offer.startTime || '09:00');
+      setOfferEndTime(item.offer.endTime || '21:00');
+    } else {
+      setOfferTitle('Special Offer');
+      setOfferDescription('');
+      setOfferDiscountType('percentage');
+      setOfferDiscountValue('');
+      setOfferStartDate(todayStr);
+      setOfferEndDate(nextWeek);
+      setOfferStartTime('09:00');
+      setOfferEndTime('21:00');
+    }
+    setIsOfferModalVisible(true);
+  };
+
+  const handleSaveOffer = async () => {
+    if (!selectedOfferItem) return;
+    const title = offerTitle.trim();
+    if (!title) {
+      Alert.alert('Required Field', 'Please enter an Offer Title (e.g. Special Offer, Diwali Mega Sale).');
+      return;
+    }
+
+    const basePrice = getOfferBasePrice(selectedOfferItem);
+    const { finalPrice, isValid, error } = calculateOfferFinalPrice(
+      basePrice,
+      offerDiscountType,
+      offerDiscountValue
+    );
+
+    if (!isValid) {
+      Alert.alert('Invalid Discount', error || 'Please enter a valid discount amount.');
+      return;
+    }
+
+    const todayStr = new Date().toISOString().split('T')[0];
+    if (offerStartDate && offerStartDate < todayStr) {
+      Alert.alert('Invalid Date', 'Offer start date cannot be in the past.');
+      return;
+    }
+    if (offerEndDate && offerEndDate < (offerStartDate || todayStr)) {
+      Alert.alert('Invalid Date', 'Offer end date cannot be earlier than start date.');
+      return;
+    }
+
+    setOfferSubmitting(true);
+    try {
+      const offerPayload = {
+        title,
+        description: offerDescription.trim(),
+        discountType: offerDiscountType,
+        discountValue: parseFloat(offerDiscountValue),
+        originalPrice: basePrice,
+        offerPrice: finalPrice,
+        startDate: offerStartDate || todayStr,
+        endDate: offerEndDate || todayStr,
+        startTime: offerStartTime || '09:00',
+        endTime: offerEndTime || '21:00',
+        isActive: true,
+      };
+
+      const updated = await applyListingOffer(selectedOfferItem.id, selectedOfferItem, offerPayload);
+      setItems(prev => prev.map(i => i.id === selectedOfferItem.id ? updated : i));
+      setIsOfferModalVisible(false);
+      Alert.alert('Offer Applied', `Offer "${title}" applied successfully! Discounted price is ₹${finalPrice}.`);
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Failed to apply offer.');
+    } finally {
+      setOfferSubmitting(false);
+    }
+  };
+
+  const handleRemoveOffer = async () => {
+    if (!selectedOfferItem) return;
+    Alert.alert(
+      'Remove Offer',
+      'Are you sure you want to remove this offer and restore the original price?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: async () => {
+            setOfferSubmitting(true);
+            try {
+              const updated = await removeListingOffer(selectedOfferItem.id, selectedOfferItem);
+              setItems(prev => prev.map(i => i.id === selectedOfferItem.id ? updated : i));
+              setIsOfferModalVisible(false);
+              Alert.alert('Offer Removed', 'Promotional offer removed and original price restored.');
+            } catch (err: any) {
+              Alert.alert('Error', err.message || 'Failed to remove offer.');
+            } finally {
+              setOfferSubmitting(false);
+            }
+          },
+        },
+      ]
+    );
+  };
 
   const toggleItem = async (id: string) => {
     const item = items.find(i => i.id === id);
@@ -698,6 +875,7 @@ export default function BusinessScreen({
     setNewItemStock('10');
     setNewItemPinCode('');
     setNewItemIsActive(true);
+    setNewItemFoodType('Veg');
     setChosenImage(null);
     setUploadedImageUrl(null);
     setIsEditing(false);
@@ -767,8 +945,8 @@ export default function BusinessScreen({
         const businessNameInput = newItemName.trim();
         const cleanPhone = bizPhone.replace(/[^0-9]/g, '');
 
-        if (cleanPhone && cleanPhone.length !== 10) {
-          Alert.alert('Invalid Phone Number', 'Please enter a valid 10-digit phone number.');
+        if (cleanPhone && !/^[6-9]\d{9}$/.test(cleanPhone)) {
+          Alert.alert('Invalid Mobile Number', 'Please enter a valid 10-digit Indian mobile number starting with 6, 7, 8, or 9.');
           setLoading(false);
           return;
         }
@@ -821,31 +999,35 @@ export default function BusinessScreen({
           // Backend API unreachable / offline mode fallback
         }
 
-        if (!apiSuccess) {
-          const newBiz = {
-            _id: newId,
-            businessName: payload.businessName,
-            vendorType: payload.vendorType,
-            category: payload.category,
-            subcategory: payload.subcategory,
-            logo: '',
-          };
-          if (!updatedUser.businesses) updatedUser.businesses = [];
+        // Newly added business outlet requires Sub Admin approval
+        const newBiz = {
+          _id: newId,
+          businessName: payload.businessName,
+          vendorType: payload.vendorType,
+          category: payload.category,
+          subcategory: payload.subcategory,
+          status: 'Pending Pincode Admin Review',
+          approvalStatus: 'Pending',
+          isApproved: false,
+          isActive: false,
+          logo: '',
+        };
+        if (!updatedUser.businesses) updatedUser.businesses = [];
 
-          // Avoid duplicate entry if business already present
-          const existingIdx = updatedUser.businesses.findIndex((b: any) => b.businessName === payload.businessName && b.vendorType === payload.vendorType);
-          if (existingIdx === -1) {
-            updatedUser.businesses.push(newBiz);
-          }
+        const existingIdx = updatedUser.businesses.findIndex((b: any) => (b._id || b.id) === newId || (b.businessName === payload.businessName && b.vendorType === payload.vendorType));
+        if (existingIdx === -1) {
+          updatedUser.businesses.push(newBiz);
+        } else {
+          updatedUser.businesses[existingIdx] = { ...updatedUser.businesses[existingIdx], ...newBiz };
         }
 
         syncVendorUser(updatedUser);
-        setActiveBusinessId(newId);
-        setActiveBizId(newId);
         setSelectedCategory(null);
-        setActiveCategory(newItemCategory);
 
-        Alert.alert('Success', 'Business added successfully!');
+        Alert.alert(
+          'Business Outlet Request Submitted',
+          `Your application to add "${payload.businessName}" (${payload.vendorType}) has been submitted for Sub Admin review.\n\nOnce approved and verified, this outlet will be activated for managing catalog items and receiving orders.`
+        );
       } else {
         if (isUploading) {
           Alert.alert('Uploading Photo', 'Please wait while the photo finishes uploading...');
@@ -853,6 +1035,17 @@ export default function BusinessScreen({
         }
 
         const isJob = newItemCategory === 'Jobs';
+
+        // Future date validation for jobs
+        if (isJob && deadlineDate) {
+          const todayStr = new Date().toISOString().split('T')[0];
+          if (deadlineDate.trim() < todayStr) {
+            Alert.alert('Invalid Deadline Date', 'Job application deadline cannot be in the past.');
+            setLoading(false);
+            return;
+          }
+        }
+
         const formattedSalary = isJob ? formatSalaryToLPA(salaryPackage) : '';
         const finalPrice = isJob
           ? (formattedSalary ? (formattedSalary.startsWith('₹') ? formattedSalary : `₹${formattedSalary}`) : (newItemPrice.startsWith('₹') ? newItemPrice : `₹${newItemPrice || '0'}`))
@@ -883,6 +1076,7 @@ export default function BusinessScreen({
           image: isJob ? '' : (imageToSave || ''),
           subCategory: newItemSubCategory || 'General',
           itemType: newItemItemType || '',
+          foodType: newItemCategory === 'Food' ? newItemFoodType : undefined,
           unit: newItemUnit.trim() || 'count',
           stock: finalStock,
           pinCode: finalPinCode,
@@ -1199,6 +1393,7 @@ export default function BusinessScreen({
     setNewItemStock(item.stock || '10');
     setNewItemPinCode(item.pinCode || '');
     setNewItemIsActive(item.isActive);
+    setNewItemFoodType((item.foodType === 'Non-Veg' || item.itemType === 'Non-Veg') ? 'Non-Veg' : 'Veg');
     setChosenImage(item.image || null);
     setUploadedImageUrl(item.image || null);
 
@@ -1599,12 +1794,21 @@ export default function BusinessScreen({
                         elevation: 2,
                       },
                     ]}>
-                    {/* Top Row: Category Pill Badge (Left) & Category Icon Box (Right) */}
+                    {/* Top Row: Category Pill Badge + Approval Status Badge (Left) & Category Icon Box (Right) */}
                     <View style={tw`flex-row justify-between items-center mb-1`}>
-                      <View style={[tw`px-3 py-1 rounded-full`, { backgroundColor: isDark ? '#422006' : '#FEF9C3' }]}>
-                        <Text style={[tw`text-[10px] font-extrabold uppercase tracking-wider`, { color: isDark ? '#FDE047' : '#854D0E' }]}>
-                          {catConf.label}
-                        </Text>
+                      <View style={tw`flex-row items-center`}>
+                        <View style={[tw`px-3 py-1 rounded-full mr-2`, { backgroundColor: isDark ? '#422006' : '#FEF9C3' }]}>
+                          <Text style={[tw`text-[10px] font-extrabold uppercase tracking-wider`, { color: isDark ? '#FDE047' : '#854D0E' }]}>
+                            {catConf.label}
+                          </Text>
+                        </View>
+                        {(biz.isApproved === false || biz.status === 'Pending Pincode Admin Review' || biz.approvalStatus === 'Pending') && (
+                          <View style={[tw`px-2.5 py-0.5 rounded-full bg-amber-100 border border-amber-300`]}>
+                            <Text style={tw`text-[10px] font-bold text-amber-800`}>
+                              ⏳ Pending Review
+                            </Text>
+                          </View>
+                        )}
                       </View>
 
                       {/* Top Right Icon Box */}
@@ -1754,7 +1958,16 @@ export default function BusinessScreen({
                     <Search size={22} color={isDark ? '#A1A1AA' : '#6B7280'} />
                   </TouchableOpacity>
                   <TouchableOpacity
-                    onPress={openAddItemModal}
+                    onPress={() => {
+                      if (selectedBiz?.isApproved === false || selectedBiz?.status === 'Pending Pincode Admin Review') {
+                        Alert.alert(
+                          'Outlet Pending Review',
+                          'This business outlet is currently awaiting Sub Admin approval. Adding items will be available once the outlet is approved.'
+                        );
+                        return;
+                      }
+                      openAddItemModal();
+                    }}
                     activeOpacity={0.7}
                     style={[
                       tw`flex-row items-center px-4 py-2 rounded-full`,
@@ -1764,6 +1977,15 @@ export default function BusinessScreen({
                     <Text style={tw`text-white font-semibold text-sm ml-1`}>Add</Text>
                   </TouchableOpacity>
                 </View>
+              </View>
+            )}
+
+            {/* Pending Outlet Alert Banner */}
+            {(selectedBiz?.isApproved === false || selectedBiz?.status === 'Pending Pincode Admin Review') && (
+              <View style={[tw`mt-2.5 p-2.5 rounded-xl flex-row items-center`, { backgroundColor: '#FEF3C7', borderColor: '#FCD34D', borderWidth: 1 }]}>
+                <Text style={tw`text-amber-900 font-bold text-xs flex-1`}>
+                  ⏳ This outlet is awaiting Sub Admin review. Adding catalog items and receiving orders are restricted until verified.
+                </Text>
               </View>
             )}
 
@@ -2038,6 +2260,12 @@ export default function BusinessScreen({
                     {/* Card Details */}
                     <View style={tw`flex-1`}>
                       <View style={tw`flex-row items-center mb-1 flex-wrap`}>
+                        {/* Food Veg / Non-Veg Indicator */}
+                        {(item.category === 'Food' || item.foodType) && (
+                          <View style={[tw`w-3.5 h-3.5 border items-center justify-center rounded-sm mr-1.5`, item.foodType === 'Non-Veg' ? tw`border-red-600` : tw`border-emerald-600`]}>
+                            <View style={[tw`w-1.5 h-1.5 rounded-full`, item.foodType === 'Non-Veg' ? tw`bg-red-600` : tw`bg-emerald-600`]} />
+                          </View>
+                        )}
                         <View style={[tw`px-2 py-0.5 rounded-md mr-1.5 bg-indigo-50`, isDark && tw`bg-indigo-950`]}>
                           <Text style={[tw`text-[10px] font-bold text-indigo-600`, isDark && tw`text-indigo-300`]}>
                             {item.subCategory || 'General'}
@@ -2061,6 +2289,15 @@ export default function BusinessScreen({
                           <View style={[tw`px-2 py-0.5 rounded-md bg-amber-50 border border-amber-300 mr-1.5`, isDark && tw`bg-amber-950/60 border-amber-700`]}>
                             <Text style={[tw`text-[10px] font-extrabold text-amber-600`, isDark && tw`text-amber-300`]}>
                               {item.badge}
+                            </Text>
+                          </View>
+                        ) : null}
+                        {/* Active Offer Pill */}
+                        {item.offer && item.offer.isActive ? (
+                          <View style={[tw`px-2 py-0.5 rounded-md bg-amber-500 mr-1.5 flex-row items-center`]}>
+                            <Tag size={10} color="#FFFFFF" style={tw`mr-1`} />
+                            <Text style={tw`text-[10px] font-black text-white`}>
+                              {item.offer.discountType === 'percentage' ? `${item.offer.discountValue}% OFF` : (item.offer.title || 'SPECIAL OFFER')}
                             </Text>
                           </View>
                         ) : null}
@@ -2096,6 +2333,36 @@ export default function BusinessScreen({
                             ⏰ {item.departureTime || item.boardingTime || '21:30'} ➔ {item.arrivalTime || '05:30'} • {item.duration || item.busSchedule || '8h 00m'}
                           </Text>
                         </View>
+                      ) : (item.category === 'Jobs' || (item.category as string) === 'Job' || selectedCategory === 'Jobs') ? (
+                        <View style={tw`mt-1.5`}>
+                          <View style={tw`flex-row flex-wrap items-center gap-1.5 mb-1`}>
+                            {item.jobType ? (
+                              <View style={[tw`px-2 py-0.5 rounded-md bg-indigo-50`, isDark && tw`bg-indigo-950`]}>
+                                <Text style={[tw`text-[10px] font-bold text-indigo-600`, isDark && tw`text-indigo-300`]}>{item.jobType}</Text>
+                              </View>
+                            ) : null}
+                            {item.experienceRequired ? (
+                              <View style={[tw`px-2 py-0.5 rounded-md bg-emerald-50`, isDark && tw`bg-emerald-950`]}>
+                                <Text style={[tw`text-[10px] font-bold text-emerald-700`, isDark && tw`text-emerald-300`]}>Exp: {item.experienceRequired}</Text>
+                              </View>
+                            ) : null}
+                            {item.jobLocation ? (
+                              <View style={[tw`px-2 py-0.5 rounded-md bg-zinc-100`, isDark && tw`bg-zinc-800`]}>
+                                <Text style={[tw`text-[10px] font-bold`, isDark ? tw`text-zinc-300` : tw`text-zinc-700`]}>📍 {item.jobLocation}</Text>
+                              </View>
+                            ) : null}
+                          </View>
+                          {item.skillsRequirement ? (
+                            <Text style={[tw`text-[11px] font-medium mb-1`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]} numberOfLines={1}>
+                              Skills: {item.skillsRequirement}
+                            </Text>
+                          ) : null}
+                          {item.deadlineDate ? (
+                            <Text style={[tw`text-[10px] font-bold`, isDark ? tw`text-amber-400` : tw`text-amber-700`]}>
+                              📅 Apply by: {item.deadlineDate}
+                            </Text>
+                          ) : null}
+                        </View>
                       ) : (
                         <Text style={[tw`text-xs mt-0.5`, isDark ? tw`text-zinc-500` : tw`text-gray-400`]} numberOfLines={2}>
                           {item.detail}
@@ -2104,7 +2371,7 @@ export default function BusinessScreen({
 
                       {/* Extra Info (Stock, Pincode) */}
                       <View style={tw`flex-row items-center mt-2 flex-wrap gap-x-2.5 gap-y-1`}>
-                        {!['Services', 'Food', 'Stay'].includes(item.category || selectedCategory || '') && (
+                        {!['Services', 'Stay', 'Jobs'].includes(item.category || selectedCategory || '') && (
                           <View style={tw`flex-row items-center`}>
                             <Package size={11} color={isDark ? '#71717A' : '#9CA3AF'} style={tw`mr-1`} />
                             <Text style={[tw`text-[10px] font-medium`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
@@ -2123,12 +2390,14 @@ export default function BusinessScreen({
                       </View>
 
                       <View style={tw`flex-row items-center gap-1.5 mt-1.5`}>
-                        <Text style={[tw`font-black text-sm`, isDark ? tw`text-white` : tw`text-gray-900`]}>
+                        <Text style={[tw`font-black text-sm`, item.offer?.isActive ? tw`text-amber-600` : (isDark ? tw`text-white` : tw`text-gray-900`)]}>
                           {typeof (item as any).price === 'number' ? `₹${(item as any).price.toLocaleString('en-IN')}` : (String((item as any).price || '₹0').startsWith('₹') ? (item as any).price : `₹${(item as any).price || '0'}`)}
                         </Text>
-                        {(item as any).originalPrice ? (
-                          <Text style={[tw`text-[10px] line-through text-gray-400 font-semibold`, isDark && tw`text-zinc-550`]}>
-                            {typeof (item as any).originalPrice === 'number' ? `₹${(item as any).originalPrice.toLocaleString('en-IN')}` : (String((item as any).originalPrice).startsWith('₹') ? (item as any).originalPrice : `₹${(item as any).originalPrice}`)}
+                        {((item as any).originalPrice || item.offer?.originalPrice) ? (
+                          <Text style={[tw`text-[10px] line-through text-gray-400 font-semibold`, isDark && tw`text-zinc-500`]}>
+                            {typeof ((item as any).originalPrice || item.offer?.originalPrice) === 'number'
+                              ? `₹${Number((item as any).originalPrice || item.offer?.originalPrice).toLocaleString('en-IN')}`
+                              : (String((item as any).originalPrice || item.offer?.originalPrice).startsWith('₹') ? ((item as any).originalPrice || item.offer?.originalPrice) : `₹${(item as any).originalPrice || item.offer?.originalPrice}`)}
                           </Text>
                         ) : null}
                       </View>
@@ -2150,16 +2419,49 @@ export default function BusinessScreen({
                         </Text>
                       </View>
 
-                      <View style={tw`flex-row items-center`}>
+                      {/* Card Action Buttons: Edit, Offer, Delete */}
+                      <View style={tw`flex-row items-center gap-1.5`}>
                         <TouchableOpacity
                           onPress={() => openEditItemModal(item)}
-                          style={tw`p-1.5 mr-1`}>
-                          <Edit3 size={15} color={isDark ? '#71717A' : '#6B7280'} />
+                          style={[tw`p-2 rounded-xl`, isDark ? tw`bg-zinc-800` : tw`bg-gray-100`]}>
+                          <Edit3 size={15} color={isDark ? '#A1A1AA' : '#4B5563'} />
                         </TouchableOpacity>
+
+                        {!['Jobs'].includes(item.category || selectedCategory || '') && (
+                          <TouchableOpacity
+                            onPress={() => openOfferModal(item)}
+                            style={[
+                              tw`px-2.5 py-1.5 rounded-xl flex-row items-center`,
+                              item.offer?.isActive
+                                ? (isDark ? tw`bg-amber-950/80 border border-amber-600` : tw`bg-amber-100 border border-amber-300`)
+                                : (isDark ? tw`bg-zinc-800` : tw`bg-gray-100`),
+                            ]}>
+                            <Tag size={13} color={item.offer?.isActive ? '#D97706' : (isDark ? '#A1A1AA' : '#4B5563')} style={tw`mr-1`} />
+                            <Text
+                              style={[
+                                tw`text-[11px] font-bold`,
+                                item.offer?.isActive
+                                  ? tw`text-amber-600`
+                                  : (isDark ? tw`text-zinc-300` : tw`text-gray-700`),
+                              ]}>
+                              Offer
+                            </Text>
+                          </TouchableOpacity>
+                        )}
+
                         <TouchableOpacity
-                          onPress={() => showItemActions(item)}
-                          style={[tw`p-1.5 rounded-lg`, isDark ? tw`bg-zinc-800` : tw`bg-gray-100`]}>
-                          <MoreVertical size={15} color={isDark ? '#71717A' : '#6B7280'} />
+                          onPress={() => {
+                            Alert.alert(
+                              'Delete Item',
+                              `Are you sure you want to delete "${item.name}"? This action cannot be undone.`,
+                              [
+                                { text: 'Cancel', style: 'cancel' },
+                                { text: 'Delete', style: 'destructive', onPress: () => handleDeleteItem(item.id) },
+                              ]
+                            );
+                          }}
+                          style={[tw`p-2 rounded-xl`, isDark ? tw`bg-red-950/40` : tw`bg-red-50`]}>
+                          <Trash size={15} color="#DC2626" />
                         </TouchableOpacity>
                       </View>
                     </View>
@@ -2672,6 +2974,50 @@ export default function BusinessScreen({
                       placeholderTextColor={isDark ? '#52525b' : '#9CA3AF'}
                     />
                   </View>
+
+                  {/* Food Veg / Non-Veg Classification (Strictly for Food) */}
+                  {newItemCategory === 'Food' && (
+                    <View style={tw`mb-4.5`}>
+                      <Text style={[tw`font-bold text-xs uppercase tracking-wider mb-2`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
+                        FOOD CLASSIFICATION <Text style={tw`text-red-500`}>*</Text>
+                      </Text>
+                      <View style={tw`flex-row gap-3`}>
+                        <TouchableOpacity
+                          activeOpacity={0.7}
+                          onPress={() => setNewItemFoodType('Veg')}
+                          style={[
+                            tw`flex-1 flex-row items-center justify-center p-3 rounded-xl border`,
+                            newItemFoodType === 'Veg'
+                              ? (isDark ? tw`bg-emerald-950/60 border-emerald-500` : tw`bg-emerald-50 border-emerald-600`)
+                              : (isDark ? tw`bg-zinc-950 border-zinc-800` : tw`bg-white border-gray-200`),
+                          ]}>
+                          <View style={[tw`w-4 h-4 border border-emerald-600 items-center justify-center rounded-sm mr-2`]}>
+                            <View style={tw`w-2 h-2 rounded-full bg-emerald-600`} />
+                          </View>
+                          <Text style={[tw`font-bold text-sm`, newItemFoodType === 'Veg' ? tw`text-emerald-600` : (isDark ? tw`text-zinc-400` : tw`text-gray-700`)]}>
+                            Pure Veg
+                          </Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                          activeOpacity={0.7}
+                          onPress={() => setNewItemFoodType('Non-Veg')}
+                          style={[
+                            tw`flex-1 flex-row items-center justify-center p-3 rounded-xl border`,
+                            newItemFoodType === 'Non-Veg'
+                              ? (isDark ? tw`bg-red-950/60 border-red-500` : tw`bg-red-50 border-red-600`)
+                              : (isDark ? tw`bg-zinc-950 border-zinc-800` : tw`bg-white border-gray-200`),
+                          ]}>
+                          <View style={[tw`w-4 h-4 border border-red-600 items-center justify-center rounded-sm mr-2`]}>
+                            <View style={tw`w-2 h-2 rounded-full bg-red-600`} />
+                          </View>
+                          <Text style={[tw`font-bold text-sm`, newItemFoodType === 'Non-Veg' ? tw`text-red-600` : (isDark ? tw`text-zinc-400` : tw`text-gray-700`)]}>
+                            Non-Veg
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  )}
 
                   {/* HOTEL NAME & CITY & ADDRESS (Strictly for Stay) */}
                   {newItemCategory === 'Stay' && (
@@ -3187,8 +3533,8 @@ export default function BusinessScreen({
                     </>
                   )}
 
-                  {/* Quantity Unit & Available Stock (Hidden for Stay, Services, Food) */}
-                  {!['Stay', 'Services', 'Food'].includes(newItemCategory) && (
+                  {/* Quantity Unit & Available Stock (Inventory for Products, Food, Daily Needs; Seats for Travel) */}
+                  {!['Stay', 'Services'].includes(newItemCategory) && (
                     newItemCategory === 'Travel' ? (
                       <View style={tw`mb-4.5`}>
                         <Text style={[tw`font-bold text-xs uppercase tracking-wider mb-2`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
@@ -3735,6 +4081,267 @@ export default function BusinessScreen({
           </View>
         </View>
       )}
+
+      {/* Individual Listing Offer Creation / Edit Modal */}
+      {isOfferModalVisible && selectedOfferItem && (() => {
+        const basePrice = getOfferBasePrice(selectedOfferItem);
+        const { finalPrice, discountAmount, isValid, error } = calculateOfferFinalPrice(
+          basePrice,
+          offerDiscountType,
+          offerDiscountValue
+        );
+
+        return (
+          <View style={[tw`absolute inset-0 justify-end`, { backgroundColor: 'rgba(0,0,0,0.6)', zIndex: 1500, elevation: 1500 }]}>
+            <View style={[tw`rounded-t-3xl px-5 pt-5 pb-8 max-h-[92%]`, isDark ? tw`bg-zinc-900` : tw`bg-white`]}>
+              {/* Header */}
+              <View style={tw`flex-row justify-between items-start mb-4`}>
+                <View style={tw`flex-1 mr-3`}>
+                  <View style={tw`flex-row items-center mb-1`}>
+                    <Tag size={16} color="#4F46E5" style={tw`mr-1.5`} />
+                    <Text style={[tw`text-xs font-bold uppercase tracking-wider text-indigo-600`]}>
+                      Listing Promotional Offer
+                    </Text>
+                  </View>
+                  <Text style={[tw`text-lg font-black`, isDark ? tw`text-white` : tw`text-gray-900`]} numberOfLines={1}>
+                    {selectedOfferItem.name}
+                  </Text>
+                  <Text style={[tw`text-xs font-semibold mt-0.5`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
+                    Category: {selectedOfferItem.category} • Base Price: ₹{basePrice.toLocaleString('en-IN')}
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  onPress={() => setIsOfferModalVisible(false)}
+                  style={[tw`w-8 h-8 rounded-full items-center justify-center`, isDark ? tw`bg-zinc-800` : tw`bg-gray-100`]}>
+                  <X size={18} color={isDark ? '#A1A1AA' : '#4B5563'} />
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView showsVerticalScrollIndicator={false} style={tw`mb-4`}>
+                {/* Offer Title (Free text) */}
+                <View style={tw`mb-4`}>
+                  <Text style={[tw`font-bold text-xs uppercase tracking-wider mb-2`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
+                    OFFER TITLE <Text style={tw`text-red-500`}>*</Text>
+                  </Text>
+                  <TextInput
+                    value={offerTitle}
+                    onChangeText={setOfferTitle}
+                    placeholder="e.g. Diwali Mega Sale, Weekend Special, Flat 20% Off"
+                    placeholderTextColor={isDark ? '#71717A' : '#9CA3AF'}
+                    style={[
+                      tw`border rounded-xl px-4 py-3 text-sm font-semibold`,
+                      isDark ? tw`bg-zinc-950 border-zinc-700 text-white` : tw`bg-gray-50 border-gray-200 text-gray-800`,
+                    ]}
+                  />
+                  <Text style={[tw`text-[10px] mt-1 font-medium`, isDark ? tw`text-zinc-500` : tw`text-gray-400`]}>
+                    Free-text title displayed prominently on customer cards and checkout.
+                  </Text>
+                </View>
+
+                {/* Offer Description (Free text) */}
+                <View style={tw`mb-4`}>
+                  <Text style={[tw`font-bold text-xs uppercase tracking-wider mb-2`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
+                    OFFER DESCRIPTION (OPTIONAL)
+                  </Text>
+                  <TextInput
+                    value={offerDescription}
+                    onChangeText={setOfferDescription}
+                    placeholder="e.g. Limited festive period discount. Valid till stock lasts."
+                    placeholderTextColor={isDark ? '#71717A' : '#9CA3AF'}
+                    multiline
+                    numberOfLines={2}
+                    style={[
+                      tw`border rounded-xl px-4 py-2.5 text-sm font-medium`,
+                      isDark ? tw`bg-zinc-950 border-zinc-700 text-white` : tw`bg-gray-50 border-gray-200 text-gray-800`,
+                    ]}
+                  />
+                </View>
+
+                {/* Discount Type Selector */}
+                <View style={tw`mb-4`}>
+                  <Text style={[tw`font-bold text-xs uppercase tracking-wider mb-2`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
+                    DISCOUNT TYPE
+                  </Text>
+                  <View style={tw`flex-row gap-2`}>
+                    {[
+                      { key: 'percentage' as const, label: 'Percentage (%)', desc: 'e.g. 20% Off' },
+                      { key: 'fixed' as const, label: 'Fixed (₹ Off)', desc: 'e.g. ₹100 Off' },
+                      { key: 'promotional' as const, label: 'Special Promo (₹)', desc: 'Flat Discount' },
+                    ].map(t => {
+                      const isSelected = offerDiscountType === t.key;
+                      return (
+                        <TouchableOpacity
+                          key={t.key}
+                          onPress={() => setOfferDiscountType(t.key)}
+                          style={[
+                            tw`flex-1 p-2.5 rounded-xl border items-center justify-center`,
+                            isSelected
+                              ? (isDark ? tw`bg-indigo-950/80 border-indigo-500` : tw`bg-indigo-50 border-indigo-600`)
+                              : (isDark ? tw`bg-zinc-950 border-zinc-800` : tw`bg-white border-gray-200`),
+                          ]}>
+                          <Text
+                            style={[
+                              tw`text-xs font-bold text-center`,
+                              isSelected ? tw`text-indigo-600` : (isDark ? tw`text-zinc-300` : tw`text-gray-700`),
+                            ]}>
+                            {t.label}
+                          </Text>
+                          <Text style={[tw`text-[10px] mt-0.5`, isDark ? tw`text-zinc-500` : tw`text-gray-400`]}>
+                            {t.desc}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </View>
+
+                {/* Discount Value Input & Live Preview */}
+                <View style={tw`mb-4`}>
+                  <Text style={[tw`font-bold text-xs uppercase tracking-wider mb-2`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
+                    DISCOUNT VALUE ({offerDiscountType === 'percentage' ? '%' : '₹'}) <Text style={tw`text-red-500`}>*</Text>
+                  </Text>
+                  <View style={tw`flex-row items-center`}>
+                    <TextInput
+                      value={offerDiscountValue}
+                      onChangeText={setOfferDiscountValue}
+                      keyboardType="numeric"
+                      placeholder={offerDiscountType === 'percentage' ? 'e.g. 20' : 'e.g. 150'}
+                      placeholderTextColor={isDark ? '#71717A' : '#9CA3AF'}
+                      style={[
+                        tw`border rounded-xl px-4 py-3 text-sm font-bold flex-1`,
+                        isDark ? tw`bg-zinc-950 border-zinc-700 text-white` : tw`bg-gray-50 border-gray-200 text-gray-800`,
+                      ]}
+                    />
+                    <View style={[tw`ml-3 px-3.5 py-3 rounded-xl border`, isDark ? tw`bg-zinc-800 border-zinc-700` : tw`bg-gray-100 border-gray-200`]}>
+                      <Text style={[tw`font-black text-sm`, isDark ? tw`text-white` : tw`text-gray-800`]}>
+                        {offerDiscountType === 'percentage' ? '%' : '₹'}
+                      </Text>
+                    </View>
+                  </View>
+
+                  {/* Real-time Dynamic Calculation Preview Card */}
+                  <View style={[tw`mt-3 p-3.5 rounded-2xl border`, isDark ? tw`bg-zinc-950 border-zinc-800` : tw`bg-indigo-50/50 border-indigo-100`]}>
+                    <Text style={[tw`text-[11px] font-bold uppercase tracking-wider text-indigo-600 mb-2`]}>
+                      Live Pricing Preview
+                    </Text>
+                    <View style={tw`flex-row justify-between items-center mb-1`}>
+                      <Text style={[tw`text-xs`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>Original Base Price:</Text>
+                      <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-300` : tw`text-gray-700`]}>₹{basePrice.toLocaleString('en-IN')}</Text>
+                    </View>
+                    <View style={tw`flex-row justify-between items-center mb-1`}>
+                      <Text style={[tw`text-xs`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>Discount Amount:</Text>
+                      <Text style={[tw`text-xs font-semibold text-rose-500`]}>- ₹{discountAmount.toLocaleString('en-IN')}</Text>
+                    </View>
+                    <View style={[tw`w-full h-px my-1.5`, isDark ? tw`bg-zinc-800` : tw`bg-indigo-200`]}>
+                    </View>
+                    <View style={tw`flex-row justify-between items-center`}>
+                      <Text style={[tw`text-sm font-bold`, isDark ? tw`text-white` : tw`text-gray-900`]}>Final Offer Price:</Text>
+                      <Text style={[tw`text-base font-black text-emerald-600`]}>₹{finalPrice.toLocaleString('en-IN')}</Text>
+                    </View>
+                    {error && (
+                      <Text style={tw`text-[11px] text-red-500 font-semibold mt-1.5`}>
+                        ⚠️ {error}
+                      </Text>
+                    )}
+                  </View>
+                </View>
+
+                {/* Offer Validity Schedule */}
+                <View style={tw`mb-4`}>
+                  <Text style={[tw`font-bold text-xs uppercase tracking-wider mb-2`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
+                    VALIDITY PERIOD (YYYY-MM-DD)
+                  </Text>
+                  <View style={tw`flex-row gap-2 mb-2`}>
+                    <View style={tw`flex-1`}>
+                      <Text style={[tw`text-[11px] font-semibold mb-1`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>Start Date</Text>
+                      <TextInput
+                        value={offerStartDate}
+                        onChangeText={setOfferStartDate}
+                        placeholder="YYYY-MM-DD"
+                        placeholderTextColor={isDark ? '#71717A' : '#9CA3AF'}
+                        style={[
+                          tw`border rounded-xl px-3 py-2.5 text-xs font-semibold`,
+                          isDark ? tw`bg-zinc-950 border-zinc-700 text-white` : tw`bg-gray-50 border-gray-200 text-gray-800`,
+                        ]}
+                      />
+                    </View>
+                    <View style={tw`flex-1`}>
+                      <Text style={[tw`text-[11px] font-semibold mb-1`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>End Date</Text>
+                      <TextInput
+                        value={offerEndDate}
+                        onChangeText={setOfferEndDate}
+                        placeholder="YYYY-MM-DD"
+                        placeholderTextColor={isDark ? '#71717A' : '#9CA3AF'}
+                        style={[
+                          tw`border rounded-xl px-3 py-2.5 text-xs font-semibold`,
+                          isDark ? tw`bg-zinc-950 border-zinc-700 text-white` : tw`bg-gray-50 border-gray-200 text-gray-800`,
+                        ]}
+                      />
+                    </View>
+                  </View>
+
+                  <View style={tw`flex-row gap-2`}>
+                    <View style={tw`flex-1`}>
+                      <Text style={[tw`text-[11px] font-semibold mb-1`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>Start Time</Text>
+                      <TextInput
+                        value={offerStartTime}
+                        onChangeText={setOfferStartTime}
+                        placeholder="09:00"
+                        placeholderTextColor={isDark ? '#71717A' : '#9CA3AF'}
+                        style={[
+                          tw`border rounded-xl px-3 py-2.5 text-xs font-semibold`,
+                          isDark ? tw`bg-zinc-950 border-zinc-700 text-white` : tw`bg-gray-50 border-gray-200 text-gray-800`,
+                        ]}
+                      />
+                    </View>
+                    <View style={tw`flex-1`}>
+                      <Text style={[tw`text-[11px] font-semibold mb-1`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>End Time</Text>
+                      <TextInput
+                        value={offerEndTime}
+                        onChangeText={setOfferEndTime}
+                        placeholder="21:00"
+                        placeholderTextColor={isDark ? '#71717A' : '#9CA3AF'}
+                        style={[
+                          tw`border rounded-xl px-3 py-2.5 text-xs font-semibold`,
+                          isDark ? tw`bg-zinc-950 border-zinc-700 text-white` : tw`bg-gray-50 border-gray-200 text-gray-800`,
+                        ]}
+                      />
+                    </View>
+                  </View>
+                </View>
+              </ScrollView>
+
+              {/* Action Buttons */}
+              <View style={tw`flex-row gap-3 pt-2`}>
+                {selectedOfferItem.offer?.isActive && (
+                  <TouchableOpacity
+                    onPress={handleRemoveOffer}
+                    disabled={offerSubmitting}
+                    style={[tw`py-3 px-4 rounded-2xl items-center justify-center border border-red-300`, isDark ? tw`bg-red-950/40` : tw`bg-red-50`]}>
+                    <Text style={tw`text-red-600 font-bold text-xs`}>Remove Offer</Text>
+                  </TouchableOpacity>
+                )}
+
+                <TouchableOpacity
+                  onPress={handleSaveOffer}
+                  disabled={offerSubmitting || !isValid}
+                  style={[
+                    tw`flex-1 py-3.5 rounded-2xl items-center justify-center`,
+                    { backgroundColor: isValid && !offerSubmitting ? '#4F46E5' : '#9CA3AF' },
+                  ]}>
+                  {offerSubmitting ? (
+                    <ActivityIndicator color="#FFFFFF" size="small" />
+                  ) : (
+                    <Text style={tw`text-white font-bold text-sm`}>
+                      {selectedOfferItem.offer?.isActive ? 'Update Offer' : 'Apply Offer'}
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        );
+      })()}
 
       {/* Upload Options Modal */}
       {isUploadModalVisible && (

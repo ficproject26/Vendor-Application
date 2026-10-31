@@ -58,18 +58,28 @@ export default function SubscriptionScreen({
 
   const loadData = async () => {
     try {
-      const [subsRes, sumRes, histRes] = await Promise.all([
+      const [subsRes, histRes] = await Promise.all([
         fetchSubscriptions().catch(() => null),
-        fetchSubscriptionSummary('all').catch(() => null),
-        fetchSubscriptionHistory('all').catch(() => null),
+        fetchSubscriptionHistory().catch(() => null),
       ]);
 
       if (subsRes && subsRes.success) {
-        if (Array.isArray(subsRes.subscriptions)) {
-          setSubscriptionsList(subsRes.subscriptions);
+        const rawBusinesses = subsRes.businesses || subsRes.subscriptions || [];
+        setSubscriptionsList(rawBusinesses);
+        if (subsRes.summary) {
+          const totalPaid = subsRes.summary.totalAmountPaid !== undefined ? subsRes.summary.totalAmountPaid : (subsRes.summary.totalPaid || 0);
+          const activeCount = subsRes.summary.totalActiveSubscriptions !== undefined ? subsRes.summary.totalActiveSubscriptions : (subsRes.summary.activeCount || 0);
+          const totalSubs = subsRes.summary.totalSubscriptions || 0;
+          const expiredCount = subsRes.summary.expiredCount !== undefined ? subsRes.summary.expiredCount : Math.max(0, totalSubs - activeCount);
+          setSummary({
+            totalPaid,
+            activeCount,
+            expiredCount,
+            nextExpiry: subsRes.summary.nextExpiry || null,
+          });
         }
       } else {
-        // Fallback to user businesses
+        // Fallback to user businesses from session
         const user = getVendorUser();
         const bizList = user?.businesses || [];
         setSubscriptionsList(
@@ -77,19 +87,16 @@ export default function SubscriptionScreen({
             businessId: b._id || b.id,
             businessName: b.businessName || 'Business Outlet',
             category: b.vendorType || b.category || 'General',
-            status: b.isSubscriptionActive ? 'active' : 'inactive',
+            status: ['active', 'approved'].includes(String(b.status || '').toLowerCase()) ? 'Active' : 'Not Subscribed',
             validUntil: b.subscriptionExpiresAt || null,
-            amount: 999,
+            amount: 1000,
           }))
         );
       }
 
-      if (sumRes && sumRes.success && sumRes.summary) {
-        setSummary(sumRes.summary);
-      }
-
-      if (histRes && histRes.success && Array.isArray(histRes.transactions)) {
-        setHistoryList(histRes.transactions);
+      if (histRes && histRes.success) {
+        const rawHistory = histRes.history || histRes.transactions || [];
+        setHistoryList(rawHistory);
       }
     } catch (err) {
       console.warn('[SubscriptionScreen] Error loading subscription data:', err);
@@ -324,8 +331,13 @@ export default function SubscriptionScreen({
               </View>
             ) : (
               subscriptionsList.map((biz, idx) => {
-                const isActive = biz.status === 'active' || biz.isSubscriptionActive;
+                const statusStr = String(biz.status || '').toLowerCase().trim();
+                const isActive = statusStr === 'active' || biz.isSubscriptionActive === true;
+                const isExpired = statusStr === 'expired';
+                const isPending = statusStr === 'pending';
                 const isSubscribing = subscribingBizId === (biz.businessId || biz._id || biz.id);
+                const subId = biz.subscriptionId || (biz._id ? `SUB-${String(biz._id).slice(-6).toUpperCase()}` : 'N/A');
+                const paymentStatus = (biz.paymentStatus || (isActive ? 'PAID' : 'UNPAID')).toUpperCase();
 
                 return (
                   <View
@@ -356,8 +368,8 @@ export default function SubscriptionScreen({
                             numberOfLines={1}>
                             {biz.businessName || 'Business Outlet'}
                           </Text>
-                          <Text style={[tw`text-xs mt-0.5`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
-                            Category: {biz.category || biz.vendorType || 'General'}
+                          <Text style={[tw`text-xs mt-0.5 font-medium`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
+                            Category: {biz.category || biz.businessType || biz.vendorType || 'General'}
                           </Text>
                         </View>
                       </View>
@@ -366,44 +378,72 @@ export default function SubscriptionScreen({
                       <View
                         style={[
                           tw`px-2.5 py-1 rounded-full flex-row items-center`,
-                          isActive ? { backgroundColor: '#ECFDF5' } : { backgroundColor: '#FEF3C7' },
+                          isActive
+                            ? { backgroundColor: '#ECFDF5' }
+                            : isExpired
+                            ? { backgroundColor: '#FEF2F2' }
+                            : { backgroundColor: '#FEF3C7' },
                         ]}>
                         {isActive ? (
                           <CheckCircle2 size={12} color="#059669" />
+                        ) : isExpired ? (
+                          <AlertCircle size={12} color="#DC2626" />
                         ) : (
                           <Clock size={12} color="#D97706" />
                         )}
                         <Text
                           style={[
                             tw`text-xs font-bold ml-1`,
-                            isActive ? tw`text-emerald-700` : tw`text-amber-700`,
+                            isActive
+                              ? tw`text-emerald-700`
+                              : isExpired
+                              ? tw`text-red-700`
+                              : tw`text-amber-700`,
                           ]}>
-                          {isActive ? 'Active' : 'Expired / Due'}
+                          {isActive ? 'Active' : isExpired ? 'Expired' : isPending ? 'Pending' : 'Not Subscribed'}
                         </Text>
                       </View>
                     </View>
 
-                    {/* Plan Details & Validity */}
+                    {/* Plan Details & Grid Breakdown */}
                     <View
                       style={[
                         tw`p-3.5 rounded-2xl mb-4`,
                         isDark ? tw`bg-zinc-950` : tw`bg-gray-50`,
                       ]}>
                       <View style={tw`flex-row justify-between items-center mb-1.5`}>
-                        <Text style={[tw`text-xs`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
-                          Plan Duration:
+                        <Text style={[tw`text-xs font-medium`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
+                          Subscription ID:
                         </Text>
-                        <Text style={[tw`text-xs font-bold`, isDark ? tw`text-white` : tw`text-gray-800`]}>
-                          1 Month Fixed Validity
+                        <Text style={[tw`text-xs font-mono font-bold`, isDark ? tw`text-zinc-300` : tw`text-gray-800`]}>
+                          {subId}
                         </Text>
                       </View>
                       <View style={tw`flex-row justify-between items-center mb-1.5`}>
-                        <Text style={[tw`text-xs`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
-                          Valid Until:
+                        <Text style={[tw`text-xs font-medium`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
+                          Plan & Duration:
+                        </Text>
+                        <Text style={[tw`text-xs font-bold`, isDark ? tw`text-white` : tw`text-gray-800`]}>
+                          {biz.planName || '1 Month Fixed Validity'} ({biz.billingCycle || 'Monthly'})
+                        </Text>
+                      </View>
+                      <View style={tw`flex-row justify-between items-center mb-1.5`}>
+                        <Text style={[tw`text-xs font-medium`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
+                          Start Date:
+                        </Text>
+                        <Text style={[tw`text-xs font-bold`, isDark ? tw`text-zinc-300` : tw`text-gray-800`]}>
+                          {biz.startDate
+                            ? new Date(biz.startDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+                            : '-'}
+                        </Text>
+                      </View>
+                      <View style={tw`flex-row justify-between items-center mb-1.5`}>
+                        <Text style={[tw`text-xs font-medium`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
+                          Expiry Date:
                         </Text>
                         <Text style={[tw`text-xs font-bold`, isDark ? tw`text-indigo-400` : tw`text-indigo-600`]}>
-                          {biz.validUntil
-                            ? new Date(biz.validUntil).toLocaleDateString('en-IN', {
+                          {biz.validUntil || biz.endDate
+                            ? new Date(biz.validUntil || biz.endDate).toLocaleDateString('en-IN', {
                                 day: 'numeric',
                                 month: 'short',
                                 year: 'numeric',
@@ -411,12 +451,32 @@ export default function SubscriptionScreen({
                             : 'Not Activated'}
                         </Text>
                       </View>
-                      <View style={tw`flex-row justify-between items-center`}>
-                        <Text style={[tw`text-xs`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
+                      <View style={tw`flex-row justify-between items-center mb-1.5`}>
+                        <Text style={[tw`text-xs font-medium`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
+                          Payment Status:
+                        </Text>
+                        <View style={[tw`px-2 py-0.5 rounded-md`, paymentStatus === 'PAID' ? { backgroundColor: '#ECFDF5' } : { backgroundColor: '#FEF3C7' }]}>
+                          <Text style={[tw`text-[10px] font-bold`, paymentStatus === 'PAID' ? tw`text-emerald-700` : tw`text-amber-700`]}>
+                            {paymentStatus}
+                          </Text>
+                        </View>
+                      </View>
+                      <View style={tw`flex-row justify-between items-center mb-1.5`}>
+                        <Text style={[tw`text-xs font-medium`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
+                          Renewal Status:
+                        </Text>
+                        <Text style={[tw`text-xs font-bold`, isActive ? tw`text-emerald-600` : tw`text-amber-600`]}>
+                          {biz.daysRemaining !== null && biz.daysRemaining !== undefined
+                            ? `${biz.daysRemaining} days remaining`
+                            : (isActive ? 'Active (Auto-Renewable)' : (biz.canRenew ? 'Renewal Available' : 'Subscription Due'))}
+                        </Text>
+                      </View>
+                      <View style={tw`flex-row justify-between items-center pt-1 border-t border-gray-150 dark:border-zinc-800`}>
+                        <Text style={[tw`text-xs font-medium`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
                           Subscription Fee:
                         </Text>
-                        <Text style={[tw`text-xs font-extrabold text-emerald-600`]}>
-                          ₹{biz.amount || 999} / Month
+                        <Text style={[tw`text-sm font-extrabold text-emerald-600`]}>
+                          ₹{biz.amount || 1000} / Month
                         </Text>
                       </View>
                     </View>
@@ -477,37 +537,82 @@ export default function SubscriptionScreen({
                 </Text>
               </View>
             ) : (
-              historyList.map((tx, idx) => (
-                <View
-                  key={tx._id || tx.transactionId || idx}
-                  style={[
-                    tw`rounded-2xl p-4 mb-3 border`,
-                    isDark ? tw`bg-zinc-900 border-zinc-800` : tw`bg-white border-gray-100`,
-                  ]}>
-                  <View style={tw`flex-row justify-between items-center mb-1`}>
-                    <Text style={[tw`font-bold text-sm`, isDark ? tw`text-white` : tw`text-gray-900`]}>
-                      {tx.businessName || 'Business Outlet'}
-                    </Text>
-                    <Text style={[tw`font-extrabold text-sm text-emerald-600`]}>
-                      ₹{tx.amount || 999}
-                    </Text>
-                  </View>
-                  <Text style={[tw`text-xs`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
-                    Order Ref: {tx.orderId || tx.razorpayOrderId || 'N/A'}
-                  </Text>
-                  <View style={tw`flex-row justify-between items-center mt-2 pt-2 border-t border-gray-100 dark:border-zinc-800`}>
-                    <Text style={[tw`text-[11px]`, isDark ? tw`text-zinc-500` : tw`text-gray-400`]}>
-                      {tx.createdAt ? new Date(tx.createdAt).toLocaleString() : 'Recent'}
-                    </Text>
-                    <View style={tw`flex-row items-center`}>
-                      <CheckCircle2 size={12} color="#059669" />
-                      <Text style={tw`text-emerald-600 text-xs font-bold ml-1`}>
-                        {tx.status || 'Paid'}
+              historyList.map((tx, idx) => {
+                const txStatus = String(tx.paymentStatus || tx.status || 'PAID').toUpperCase();
+                const isSuccess = txStatus === 'SUCCESS' || txStatus === 'PAID';
+                const txRef = tx.paymentId || tx.razorpayPaymentId || tx.orderId || tx.razorpayOrderId || 'N/A';
+                const dateStr = tx.paymentDate || tx.createdAt || tx.timestamp;
+
+                return (
+                  <View
+                    key={tx._id || tx.transactionId || idx}
+                    style={[
+                      tw`rounded-2xl p-4 mb-3 border`,
+                      isDark ? tw`bg-zinc-900 border-zinc-800` : tw`bg-white border-gray-100`,
+                    ]}>
+                    <View style={tw`flex-row justify-between items-start mb-1`}>
+                      <View style={tw`flex-1 pr-2`}>
+                        <Text style={[tw`font-bold text-sm`, isDark ? tw`text-white` : tw`text-gray-900`]}>
+                          {tx.businessName || 'Business Outlet'}
+                        </Text>
+                        <Text style={[tw`text-xs mt-0.5`, isDark ? tw`text-indigo-400` : tw`text-indigo-600`]}>
+                          {tx.subscriptionType || tx.planName || 'Monthly Subscription'}
+                        </Text>
+                      </View>
+                      <Text style={[tw`font-extrabold text-base text-emerald-600`]}>
+                        ₹{tx.amount || 1000}
                       </Text>
                     </View>
+
+                    <View style={tw`mt-2 pt-2 border-t border-gray-100 dark:border-zinc-800`}>
+                      <View style={tw`flex-row justify-between items-center mb-1`}>
+                        <Text style={[tw`text-[11px] font-medium`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
+                          Ref / Payment ID:
+                        </Text>
+                        <Text style={[tw`text-[11px] font-mono font-bold`, isDark ? tw`text-zinc-300` : tw`text-gray-700`]}>
+                          {txRef}
+                        </Text>
+                      </View>
+                      {Boolean(tx.validFrom || tx.validUntil) && (
+                        <View style={tw`flex-row justify-between items-center mb-1`}>
+                          <Text style={[tw`text-[11px] font-medium`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
+                            Validity Period:
+                          </Text>
+                          <Text style={[tw`text-[11px] font-semibold`, isDark ? tw`text-zinc-300` : tw`text-gray-700`]}>
+                            {tx.validFrom ? new Date(tx.validFrom).toLocaleDateString('en-IN') : '-'} ➔ {tx.validUntil ? new Date(tx.validUntil).toLocaleDateString('en-IN') : '-'}
+                          </Text>
+                        </View>
+                      )}
+                      {Boolean(tx.paymentMethod) && (
+                        <View style={tw`flex-row justify-between items-center mb-1`}>
+                          <Text style={[tw`text-[11px] font-medium`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
+                            Payment Mode:
+                          </Text>
+                          <Text style={[tw`text-[11px] font-semibold`, isDark ? tw`text-zinc-300` : tw`text-gray-700`]}>
+                            {tx.paymentMethod}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+
+                    <View style={tw`flex-row justify-between items-center mt-2 pt-2 border-t border-gray-100 dark:border-zinc-800`}>
+                      <Text style={[tw`text-[11px]`, isDark ? tw`text-zinc-500` : tw`text-gray-400`]}>
+                        {dateStr ? new Date(dateStr).toLocaleString('en-IN') : 'Recent'}
+                      </Text>
+                      <View style={tw`flex-row items-center`}>
+                        {isSuccess ? (
+                          <CheckCircle2 size={12} color="#059669" />
+                        ) : (
+                          <AlertCircle size={12} color="#DC2626" />
+                        )}
+                        <Text style={[tw`text-xs font-bold ml-1`, isSuccess ? tw`text-emerald-600` : tw`text-red-600`]}>
+                          {txStatus}
+                        </Text>
+                      </View>
+                    </View>
                   </View>
-                </View>
-              ))
+                );
+              })
             )}
           </View>
         )}

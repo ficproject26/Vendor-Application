@@ -437,9 +437,18 @@ const DEFAULT_FALLBACK_IMAGE = '';
 
 // Map API product response to App's BusinessItem
 export const mapApiProductToBusinessItem = (product: any, categoryFallback: CategoryKey = 'Products'): BusinessItem => {
-  const rawCat = product.mainCategory || product.subNavbarCategory || product.vendorType || product.category || categoryFallback;
-  const resolvedCategory = normalizeCategory(rawCat);
-  const isJob = resolvedCategory === 'Jobs';
+  const isJob = Boolean(
+    product.mainCategory === 'Jobs' ||
+    product.subNavbarCategory === 'Jobs' ||
+    product.category === 'Jobs' ||
+    categoryFallback === 'Jobs' ||
+    product.jobType ||
+    product.salaryPackage ||
+    product.vacancies ||
+    product.skillsRequirement
+  );
+  const rawCat = isJob ? 'Jobs' : (product.mainCategory || product.subNavbarCategory || product.vendorType || product.category || categoryFallback);
+  const resolvedCategory: CategoryKey = isJob ? 'Jobs' : normalizeCategory(rawCat);
 
   let displayPrice = '₹0';
   if (isJob) {
@@ -535,8 +544,21 @@ export const mapApiProductToBusinessItem = (product: any, categoryFallback: Cate
     vehicleRegNo: product.vehicleRegNo || product.vehicleNumber || product.busNumber || '',
     busNumber: product.busNumber || product.vehicleNumber || product.vehicleRegNo || '',
     seatsLeft: product.seatsLeft ? Number(product.seatsLeft) : (product.stock ? Number(product.stock) : 0),
-    foodType: product.foodType || '',
+    foodType: product.foodType || (product.itemType === 'Veg' || product.itemType === 'Non-Veg' ? product.itemType : ''),
     preparationTime: product.preparationTime || '',
+    offer: product.offer && (product.offer.title || product.offer.discountValue || product.offer.offerPrice) ? {
+      title: product.offer.title || 'Special Offer',
+      description: product.offer.description || '',
+      discountType: product.offer.discountType || 'percentage',
+      discountValue: Number(product.offer.discountValue || 0),
+      originalPrice: Number(product.offer.originalPrice || product.originalPrice || 0),
+      offerPrice: Number(product.offer.offerPrice || product.price || 0),
+      startDate: product.offer.startDate || '',
+      endDate: product.offer.endDate || '',
+      startTime: product.offer.startTime || '',
+      endTime: product.offer.endTime || '',
+      isActive: product.offer.isActive !== false,
+    } : undefined,
     // Job fields
     jobType: product.jobType || '',
     jobLocation: product.jobLocation || '',
@@ -602,11 +624,32 @@ export const mapBusinessItemToApiProduct = (item: Partial<BusinessItem>, vendorU
     itemType: item.itemType || '',
     stock: item.stock ? Number(item.stock) : (item.vacancies ? Number(item.vacancies) : 0),
     unit: item.unit || 'count',
-    status: item.isActive !== false ? 'Available' : 'Out of Stock',
+    status: (() => {
+      if (item.isActive === false) {
+        return ['Services', 'Travel', 'Stay'].includes(item.category || '') ? 'Unavailable' : 'Out of Stock';
+      }
+      if (['Services', 'Travel', 'Stay'].includes(item.category || '')) {
+        return 'Available';
+      }
+      return Number(item.stock || 0) > 0 ? 'Available' : 'Out of Stock';
+    })(),
+    offer: item.offer ? {
+      title: item.offer.title,
+      description: item.offer.description || '',
+      discountType: item.offer.discountType || 'percentage',
+      discountValue: Number(item.offer.discountValue || 0),
+      originalPrice: Number(item.offer.originalPrice || 0),
+      offerPrice: Number(item.offer.offerPrice || 0),
+      startDate: item.offer.startDate || '',
+      endDate: item.offer.endDate || '',
+      startTime: item.offer.startTime || '',
+      endTime: item.offer.endTime || '',
+      isActive: item.offer.isActive !== false,
+    } : (item.offer === null ? null : undefined),
     image: validImage,
     imageUrl: validImage,
     pinCode: item.pinCode || vendorUser?.postalCode || '',
-    foodType: item.category === 'Food' ? (item.foodType || item.itemType) : undefined,
+    foodType: item.category === 'Food' ? (item.foodType || 'Veg') : undefined,
     roomType: item.category === 'Stay' ? (item.roomClass || item.itemType) : undefined,
     roomClass: item.roomClass,
     numberOfGuests: item.numberOfGuests,
@@ -888,6 +931,36 @@ export const deleteProduct = async (id: string) => {
   clearApiCache('/vendor/products');
   clearApiCache('/vendor/analytics');
   return data;
+};
+
+export const applyListingOffer = async (
+  productId: string,
+  existingItem: BusinessItem,
+  offerData: NonNullable<BusinessItem['offer']>
+): Promise<BusinessItem> => {
+  return await updateProduct(productId, {
+    ...existingItem,
+    price: `₹${offerData.offerPrice}`,
+    originalPrice: `₹${offerData.originalPrice}`,
+    offer: offerData,
+  });
+};
+
+export const removeListingOffer = async (
+  productId: string,
+  existingItem: BusinessItem
+): Promise<BusinessItem> => {
+  const restoredBasePrice = existingItem.offer?.originalPrice || existingItem.originalPrice || existingItem.price;
+  const numBase = typeof restoredBasePrice === 'number'
+    ? restoredBasePrice
+    : Number(String(restoredBasePrice).replace(/[^\d]/g, '')) || 0;
+
+  return await updateProduct(productId, {
+    ...existingItem,
+    price: `₹${numBase}`,
+    originalPrice: undefined,
+    offer: undefined,
+  });
 };
 
 export interface CustomerItem {
@@ -1270,4 +1343,22 @@ export const replyVendorTicket = async (ticketId: string, message: string) => {
   });
   return data;
 };
+
+// ==========================================
+// Accepting Orders & Vendor Ratings API
+// ==========================================
+
+export const updateAcceptingOrders = async (isAccepting: boolean) => {
+  const data = await apiRequest('/vendor/accepting-orders', {
+    method: 'PUT',
+    body: JSON.stringify({ isAcceptingOrders: isAccepting, acceptingOrders: isAccepting }),
+  });
+  return data;
+};
+
+export const fetchVendorRatings = async () => {
+  const data = await apiRequest('/vendor/ratings', { method: 'GET' });
+  return data;
+};
+
 

@@ -64,20 +64,27 @@ export default function VendorPaymentsScreen({
       ]);
 
       if (salesRes && salesRes.success) {
-        if (Array.isArray(salesRes.payments)) {
-          setSalesPayments(salesRes.payments);
-        }
+        const rawSales = salesRes.data || salesRes.payments || [];
+        setSalesPayments(Array.isArray(rawSales) ? rawSales : []);
         if (salesRes.summary) {
-          setSalesSummary(salesRes.summary);
+          setSalesSummary({
+            totalAmount: salesRes.summary.totalSales !== undefined ? salesRes.summary.totalSales : (salesRes.summary.totalAmount || 0),
+            count: salesRes.summary.count !== undefined ? salesRes.summary.count : rawSales.length,
+            totalCommission: salesRes.summary.totalCommission || 0,
+            totalVendorReceived: salesRes.summary.totalVendorReceived || 0,
+          });
         }
       }
 
       if (settRes && settRes.success) {
-        if (Array.isArray(settRes.settlements)) {
-          setSettlements(settRes.settlements);
-        }
+        const rawSettlements = settRes.data || settRes.settlements || [];
+        setSettlements(Array.isArray(rawSettlements) ? rawSettlements : []);
         if (settRes.summary) {
-          setSettlementsSummary(settRes.summary);
+          setSettlementsSummary({
+            totalSettled: settRes.summary.totalReceived !== undefined ? settRes.summary.totalReceived : (settRes.summary.totalSettled || 0),
+            totalCommission: settRes.summary.totalCommissionDeducted !== undefined ? settRes.summary.totalCommissionDeducted : (settRes.summary.totalCommission || 0),
+            pendingSettlement: settRes.summary.pendingSettlement || 0,
+          });
         }
       }
     } catch (err) {
@@ -328,7 +335,15 @@ export default function VendorPaymentsScreen({
               </View>
             ) : (
               filteredSales.map((item, idx) => {
-                const isPaid = (item.paymentStatus || 'completed').toLowerCase() === 'completed';
+                const statusStr = String(item.paymentStatus || 'Successful').toLowerCase();
+                const isSuccess = statusStr === 'successful' || statusStr === 'completed' || statusStr === 'paid';
+                const isHold = statusStr === 'hold' || statusStr === 'pending';
+                const isFailed = statusStr === 'failed' || statusStr === 'rejected';
+
+                const totalAmt = item.saleAmount !== undefined ? item.saleAmount : (item.finalAmount || item.amount || 0);
+                const netAmt = item.vendorReceivedAmount !== undefined ? item.vendorReceivedAmount : totalAmt;
+                const commissionAmt = item.commission || 0;
+                const dateVal = item.paymentDate || item.saleDate || item.createdAt;
 
                 return (
                   <View
@@ -342,13 +357,43 @@ export default function VendorPaymentsScreen({
                         <Text style={[tw`font-bold text-sm`, isDark ? tw`text-white` : tw`text-gray-900`]}>
                           {item.order_number || item.orderId || `ORD-${String(item._id || '').slice(-6)}`}
                         </Text>
-                        <Text style={[tw`text-xs mt-0.5`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
+                        <Text style={[tw`text-xs mt-0.5 font-medium`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
                           Customer: {item.customerName || item.memberName || 'Direct Buyer'}
                         </Text>
+                        <Text style={[tw`text-[11px] mt-0.5`, isDark ? tw`text-indigo-400` : tw`text-indigo-600`]} numberOfLines={1}>
+                          {item.category ? `[${item.category}] ` : ''}{item.itemName || 'Store Item'}
+                        </Text>
                       </View>
-                      <Text style={[tw`font-extrabold text-base text-emerald-600`]}>
-                        ₹{item.finalAmount || item.amount || 0}
-                      </Text>
+                      <View style={tw`items-end`}>
+                        <Text style={[tw`font-extrabold text-base text-emerald-600`]}>
+                          ₹{netAmt}
+                        </Text>
+                        <Text style={[tw`text-[10px] font-medium`, isDark ? tw`text-zinc-400` : tw`text-gray-400`]}>
+                          Net Payout
+                        </Text>
+                      </View>
+                    </View>
+
+                    {/* Transaction Reference & Charges Breakdown */}
+                    <View style={[tw`p-2.5 rounded-xl my-2`, isDark ? tw`bg-zinc-950` : tw`bg-gray-50`]}>
+                      <View style={tw`flex-row justify-between items-center mb-1`}>
+                        <Text style={[tw`text-[11px] font-medium`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
+                          Txn Reference:
+                        </Text>
+                        <Text style={[tw`text-[11px] font-mono font-semibold`, isDark ? tw`text-zinc-300` : tw`text-gray-700`]}>
+                          {item.transactionId || `TXN-${String(item.orderId || item._id).slice(-8)}`}
+                        </Text>
+                      </View>
+                      <View style={tw`flex-row justify-between items-center`}>
+                        <Text style={[tw`text-[11px] font-medium`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
+                          Gross Sale: ₹{totalAmt}
+                        </Text>
+                        {commissionAmt > 0 && (
+                          <Text style={[tw`text-[11px] font-medium text-amber-600`]}>
+                            Fee / Comm: -₹{commissionAmt}
+                          </Text>
+                        )}
+                      </View>
                     </View>
 
                     <View
@@ -365,22 +410,28 @@ export default function VendorPaymentsScreen({
                           {item.paymentMethod || 'Online'}
                         </Text>
                         <Text style={[tw`text-[11px]`, isDark ? tw`text-zinc-500` : tw`text-gray-400`]}>
-                          {item.createdAt ? new Date(item.createdAt).toLocaleDateString() : 'Recent'}
+                          {dateVal ? new Date(dateVal).toLocaleDateString('en-IN') : 'Recent'}
                         </Text>
                       </View>
 
                       <View style={tw`flex-row items-center`}>
-                        {isPaid ? (
+                        {isSuccess ? (
                           <CheckCircle2 size={12} color="#059669" />
+                        ) : isFailed ? (
+                          <AlertCircle size={12} color="#DC2626" />
                         ) : (
                           <Clock size={12} color="#D97706" />
                         )}
                         <Text
                           style={[
                             tw`text-xs font-bold ml-1`,
-                            isPaid ? tw`text-emerald-600` : tw`text-amber-600`,
+                            isSuccess
+                              ? tw`text-emerald-600`
+                              : isFailed
+                              ? tw`text-red-600`
+                              : tw`text-amber-600`,
                           ]}>
-                          {item.paymentStatus || 'Completed'}
+                          {item.paymentStatus || 'Successful'}
                         </Text>
                       </View>
                     </View>

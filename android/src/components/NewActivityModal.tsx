@@ -37,6 +37,8 @@ interface NewActivityModalProps {
   onClose: () => void;
   isProcessing?: boolean;
   isDark?: boolean;
+  remainingSeconds?: number;
+  queueCount?: number;
 }
 
 export default function NewActivityModal({
@@ -48,6 +50,8 @@ export default function NewActivityModal({
   onClose,
   isProcessing = false,
   isDark = false,
+  remainingSeconds,
+  queueCount = 0,
 }: NewActivityModalProps) {
   if (!notification) return null;
 
@@ -174,6 +178,21 @@ export default function NewActivityModal({
               maxHeight: '90%',
             },
           ]}>
+          {/* 15s Auto-Dismiss Progress Bar */}
+          {remainingSeconds !== undefined ? (
+            <View style={[tw`w-full h-1.5 rounded-full overflow-hidden mb-3`, isDark ? tw`bg-zinc-800` : tw`bg-gray-100`]}>
+              <View
+                style={[
+                  tw`h-full rounded-full`,
+                  {
+                    width: `${Math.max(0, Math.min(100, (remainingSeconds / 15) * 100))}%`,
+                    backgroundColor: isOrder ? '#059669' : isBooking ? '#4F46E5' : '#7C3AED',
+                  },
+                ]}
+              />
+            </View>
+          ) : null}
+
           {/* Header */}
           <View style={tw`flex-row justify-between items-start pb-3 border-b border-gray-100 dark:border-zinc-800`}>
             <View style={tw`flex-row items-center flex-1 mr-2`}>
@@ -204,6 +223,19 @@ export default function NewActivityModal({
                 <Text style={[tw`text-[11px] font-mono mt-0.5`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
                   #{txId} • {dateTimeStr}
                 </Text>
+                {remainingSeconds !== undefined ? (
+                  <View style={[tw`mt-1.5 self-start px-2 py-0.5 rounded-full flex-row items-center border`, isDark ? tw`bg-zinc-800/80 border-zinc-700` : tw`bg-indigo-50 border-indigo-200`]}>
+                    <Clock size={10} color={isDark ? '#A1A1AA' : '#4F46E5'} style={tw`mr-1`} />
+                    <Text style={[tw`text-[10px] font-bold`, isDark ? tw`text-zinc-300` : tw`text-indigo-700`]}>
+                      Auto-dismiss in {remainingSeconds}s
+                    </Text>
+                    {queueCount !== undefined && queueCount > 0 ? (
+                      <Text style={tw`ml-1 text-[9px] font-black text-amber-600`}>
+                        (+{queueCount} queued)
+                      </Text>
+                    ) : null}
+                  </View>
+                ) : null}
               </View>
             </View>
 
@@ -320,48 +352,105 @@ export default function NewActivityModal({
                 </View>
               ) : isBooking ? (
                 <View style={tw`gap-1.5`}>
-                  <View style={tw`flex-row justify-between`}>
-                    <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>Service:</Text>
-                    <Text style={[tw`text-xs font-extrabold text-indigo-600 flex-1 text-right ml-2`]}>
-                      {raw.serviceName || raw.bus_name || notification.itemName}
-                    </Text>
-                  </View>
-                  {isStay ? (
-                    <>
-                      <View style={tw`flex-row justify-between`}>
-                        <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>Dates:</Text>
-                        <Text style={[tw`text-xs font-bold`, isDark ? tw`text-white` : tw`text-gray-800`]}>
-                          {raw.checkInDate || 'N/A'} → {raw.checkOutDate || 'N/A'}
-                        </Text>
-                      </View>
-                      <View style={tw`flex-row justify-between`}>
-                        <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>Guests & Rooms:</Text>
-                        <Text style={[tw`text-xs font-bold`, isDark ? tw`text-white` : tw`text-gray-800`]}>
-                          {raw.roomsCount || 1} Room(s) • {raw.numAdults || 1} Adult(s)
-                        </Text>
-                      </View>
-                    </>
-                  ) : isTravel ? (
-                    <>
-                      <View style={tw`flex-row justify-between`}>
-                        <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>Travel Date:</Text>
-                        <Text style={[tw`text-xs font-bold`, isDark ? tw`text-white` : tw`text-gray-800`]}>{raw.travelDate || 'Today'}</Text>
-                      </View>
-                      <View style={tw`flex-row justify-between`}>
-                        <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>Route:</Text>
-                        <Text style={[tw`text-xs font-bold text-right flex-1 ml-2`, isDark ? tw`text-white` : tw`text-gray-800`]}>
-                          {raw.boardingPoint?.name || raw.boardingPoint || 'Origin'} → {raw.droppingPoint?.name || raw.droppingPoint || 'Destination'}
-                        </Text>
-                      </View>
-                    </>
-                  ) : (
-                    <View style={tw`flex-row justify-between`}>
-                      <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>Time Slot:</Text>
-                      <Text style={[tw`text-xs font-bold`, isDark ? tw`text-white` : tw`text-gray-800`]}>
-                        {raw.appointmentDate || 'Today'} ({raw.appointmentTimeSlot || raw.appointment_slot || '10:30 AM'})
-                      </Text>
-                    </View>
-                  )}
+                  {(() => {
+                    const GENERIC_CATS = ['electrical & solar services', 'electrical & solar', 'electrical services', 'plumbing services', 'services', 'service', 'general service', 'daily needs', 'products'];
+                    let modalServiceName = raw.serviceName;
+                    let modalPackageName = raw.packageName || (raw.items && raw.items[0]?.variant);
+
+                    if (isTravel && raw.bus_name) {
+                      modalServiceName = raw.bus_name;
+                    } else if (!modalServiceName || GENERIC_CATS.includes(String(modalServiceName).trim().toLowerCase())) {
+                      const candidate = (raw.items && raw.items[0]?.name) || raw.product_details || raw.name || notification.itemName || '';
+                      const m = candidate.match(/^([^(•·\n\r]+)(?:\(([^)]+)\))?/);
+                      if (m) {
+                        modalServiceName = m[1].trim();
+                        if (!modalPackageName && m[2]) modalPackageName = m[2].split(/[•·]/)[0].trim();
+                      } else {
+                        modalServiceName = candidate || 'Service Booking';
+                      }
+                    } else if (String(modalServiceName).includes('(')) {
+                      const m = String(modalServiceName).match(/^([^(]+)(?:\(([^)]+)\))?/);
+                      if (m) {
+                        modalServiceName = m[1].trim();
+                        if (!modalPackageName && m[2]) modalPackageName = m[2].trim();
+                      }
+                    }
+
+                    let modalApptDate = raw.serviceDate || raw.appointmentDate || raw.bookingDate;
+                    let modalApptSlot = raw.serviceTime || raw.appointmentTimeSlot;
+                    if ((!modalApptDate || !modalApptSlot) && raw.appointment_slot) {
+                      if (raw.appointment_slot.includes(' at ')) {
+                        const [d, t] = raw.appointment_slot.split(' at ');
+                        if (!modalApptDate) modalApptDate = d.trim();
+                        if (!modalApptSlot) modalApptSlot = t.trim();
+                      } else if (!modalApptDate) {
+                        modalApptDate = raw.appointment_slot;
+                      }
+                    }
+                    if ((!modalApptDate || !modalApptSlot) && raw.product_details) {
+                      const m = String(raw.product_details).match(/[•·]\s*([A-Za-z0-9,\s]+?)\s+at\s+([0-9:AMPMapm\s]+)/);
+                      if (m) {
+                        if (!modalApptDate) modalApptDate = m[1].trim();
+                        if (!modalApptSlot) modalApptSlot = m[2].trim();
+                      }
+                    }
+
+                    return (
+                      <>
+                        <View style={tw`flex-row justify-between items-start`}>
+                          <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>Service:</Text>
+                          <View style={tw`flex-1 items-end ml-2`}>
+                            <Text style={[tw`text-xs font-extrabold text-indigo-600`]}>
+                              {modalServiceName || 'Service Booking'}
+                            </Text>
+                            {modalPackageName ? (
+                              <View style={[tw`mt-0.5 px-2 py-0.5 rounded`, isDark ? tw`bg-teal-950/70` : tw`bg-teal-50`]}>
+                                <Text style={tw`text-[10px] font-bold text-teal-700 dark:text-teal-400`}>
+                                  📦 {modalPackageName}
+                                </Text>
+                              </View>
+                            ) : null}
+                          </View>
+                        </View>
+                        {isStay ? (
+                          <>
+                            <View style={tw`flex-row justify-between`}>
+                              <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>Dates:</Text>
+                              <Text style={[tw`text-xs font-bold`, isDark ? tw`text-white` : tw`text-gray-800`]}>
+                                {raw.checkInDate || 'N/A'} → {raw.checkOutDate || 'N/A'}
+                              </Text>
+                            </View>
+                            <View style={tw`flex-row justify-between`}>
+                              <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>Guests & Rooms:</Text>
+                              <Text style={[tw`text-xs font-bold`, isDark ? tw`text-white` : tw`text-gray-800`]}>
+                                {raw.roomsCount || 1} Room(s) • {raw.numAdults || 1} Adult(s)
+                              </Text>
+                            </View>
+                          </>
+                        ) : isTravel ? (
+                          <>
+                            <View style={tw`flex-row justify-between`}>
+                              <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>Travel Date:</Text>
+                              <Text style={[tw`text-xs font-bold`, isDark ? tw`text-white` : tw`text-gray-800`]}>{raw.travelDate || 'Today'}</Text>
+                            </View>
+                            <View style={tw`flex-row justify-between`}>
+                              <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>Route:</Text>
+                              <Text style={[tw`text-xs font-bold text-right flex-1 ml-2`, isDark ? tw`text-white` : tw`text-gray-800`]}>
+                                {raw.boardingPoint?.name || raw.boardingPoint || 'Origin'} → {raw.droppingPoint?.name || raw.droppingPoint || 'Destination'}
+                              </Text>
+                            </View>
+                          </>
+                        ) : (
+                          <View style={tw`flex-row justify-between`}>
+                            <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>Schedule:</Text>
+                            <Text style={[tw`text-xs font-bold`, isDark ? tw`text-white` : tw`text-gray-800`]}>
+                              {modalApptDate || 'On-Demand Service'} {modalApptSlot ? `(${modalApptSlot})` : ''}
+                            </Text>
+                          </View>
+                        )}
+                      </>
+                    );
+                  })()}
                 </View>
               ) : (
                 <View style={tw`gap-2`}>

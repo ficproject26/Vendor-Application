@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { fetchAnalytics, getVendorUser, fetchProfile, fetchOrders, fetchBookings, updateOrderStatus, fetchCustomers, CustomerItem, addLocalOrder, normalizeCategory } from '../services/apiService';
+import { fetchAnalytics, getVendorUser, fetchProfile, fetchOrders, fetchBookings, updateOrderStatus, fetchCustomers, CustomerItem, addLocalOrder, normalizeCategory, fetchVendorRatings } from '../services/apiService';
 import { socketService } from '../services/socketService';
 import { soundNotificationService } from '../services/soundNotificationService';
 import {
@@ -299,7 +299,49 @@ export default function HomeScreen({
 
   useEffect(() => {
     loadAnalytics();
+    loadVendorRatings();
   }, []);
+
+  // Customer Ratings & Reviews States
+  const [isReviewsVisible, setIsReviewsVisible] = useState(false);
+  const [loadingRatings, setLoadingRatings] = useState(false);
+  const [ratingsData, setRatingsData] = useState<{
+    averageRating: number;
+    totalRatings: number;
+    breakdown: Record<string, number>;
+    reviews: Array<{
+      id: string;
+      orderId?: string;
+      customerName: string;
+      rating: number;
+      comment: string;
+      createdAt: string;
+    }>;
+  }>({
+    averageRating: 0,
+    totalRatings: 0,
+    breakdown: { '5': 0, '4': 0, '3': 0, '2': 0, '1': 0 },
+    reviews: [],
+  });
+
+  const loadVendorRatings = async () => {
+    setLoadingRatings(true);
+    try {
+      const res = await fetchVendorRatings();
+      if (res && res.success) {
+        setRatingsData({
+          averageRating: res.averageRating || 0,
+          totalRatings: res.totalRatings || 0,
+          breakdown: res.breakdown || { '5': 0, '4': 0, '3': 0, '2': 0, '1': 0 },
+          reviews: res.reviews || [],
+        });
+      }
+    } catch (err) {
+      console.warn('[HomeScreen] Failed to load ratings:', err);
+    } finally {
+      setLoadingRatings(false);
+    }
+  };
 
   const totalOrders = analytics?.ordersCount ?? analytics?.totalOrdersCount ?? (Array.isArray(recentOrdersList) ? recentOrdersList.length : 0);
   const totalRevenue = analytics?.totalRevenue ?? 0;
@@ -323,7 +365,7 @@ export default function HomeScreen({
       icon: Wallet,
       color: '#7C3AED',
       bgColor: '#F5F3FF',
-      onPress: () => onNavigate && onNavigate('Payments'),
+      onPress: () => onNavigate && onNavigate('VendorPayments'),
     },
     {
       label: 'Products',
@@ -335,14 +377,17 @@ export default function HomeScreen({
       onPress: () => onNavigate && onNavigate('Business'),
     },
     {
-      label: 'Members',
-      value: String(activeMemberships),
-      change: activeMemberships > 0 ? 'Active' : '',
+      label: 'Customer Rating',
+      value: ratingsData.totalRatings > 0 ? `${ratingsData.averageRating.toFixed(1)} ★` : '5.0 ★',
+      change: ratingsData.totalRatings > 0 ? `${ratingsData.totalRatings} Reviews` : 'Verified Feedback',
       icon: Star,
       color: '#F59E0B',
       bgColor: '#FEF3C7',
       isStar: true,
-      onPress: () => setIsMembershipVisible(true),
+      onPress: () => {
+        setIsReviewsVisible(true);
+        loadVendorRatings();
+      },
     },
   ];
 
@@ -351,21 +396,10 @@ export default function HomeScreen({
   const [storeOpen, setStoreOpen] = useState(true);
   const slideAnim = useRef(new Animated.Value(-screenWidth)).current;
 
-  // Membership Card States & Config
-  const [isMembershipVisible, setIsMembershipVisible] = useState(false);
   const [isCustomersVisible, setIsCustomersVisible] = useState(false);
   const [customersList, setCustomersList] = useState<CustomerItem[]>([]);
   const [loadingCustomers, setLoadingCustomers] = useState(false);
   const [customersSearchQuery, setCustomersSearchQuery] = useState('');
-  const [selectedTier, setSelectedTier] = useState<'Silver' | 'Gold' | 'Diamond'>(purchasedTier);
-
-  React.useEffect(() => {
-    setSelectedTier(purchasedTier);
-  }, [purchasedTier]);
-
-  // Card Flip Animation State
-  const [isFlipped, setIsFlipped] = useState(false);
-  const scaleXAnim = useRef(new Animated.Value(1)).current;
 
   const loadCustomersData = async () => {
     setLoadingCustomers(true);
@@ -384,123 +418,6 @@ export default function HomeScreen({
     if (!customersList || customersList.length === 0) {
       loadCustomersData();
     }
-  };
-
-  const handleFlipCard = () => {
-    Animated.timing(scaleXAnim, {
-      toValue: 0,
-      duration: 150,
-      useNativeDriver: true,
-    }).start(() => {
-      setIsFlipped(prev => !prev);
-      Animated.timing(scaleXAnim, {
-        toValue: 1,
-        duration: 150,
-        useNativeDriver: true,
-      }).start();
-    });
-  };
-
-  const tierConfig = {
-    Silver: {
-      bgColor: '#4B5563',
-      glow1: '#9CA3AF',
-      glow2: '#D1D5DB',
-      badge: 'SILVER',
-      id: 'MEM-8829-SLV',
-      level: 'SILVER PARTNER',
-      benefits: [
-        {
-          title: '5% Platform Commission',
-          description: 'Keep 95% of your earnings on every order',
-          icon: Percent,
-          iconColor: '#16A34A',
-          iconBg: '#F0FDF4',
-        },
-        {
-          title: 'Standard Store Listing',
-          description: 'Appear in local searches within your area',
-          icon: Award,
-          iconColor: '#4F46E5',
-          iconBg: '#EEF2FF',
-        },
-        {
-          title: 'Basic Analytics',
-          description: 'Track daily visitor counts and page views',
-          icon: Sparkles,
-          iconColor: '#DC2626',
-          iconBg: '#FEF2F2',
-        },
-      ],
-    },
-    Gold: {
-      bgColor: '#B45309',
-      glow1: '#F59E0B',
-      glow2: '#FBBF24',
-      badge: 'GOLD',
-      id: 'MEM-8829-GLD',
-      level: 'GOLD PARTNER',
-      benefits: [
-        {
-          title: '2% Platform Commission',
-          description: 'Keep 98% of your earnings on every order',
-          icon: Percent,
-          iconColor: '#16A34A',
-          iconBg: '#F0FDF4',
-        },
-        {
-          title: 'Priority Store Listing',
-          description: 'Appear higher in local searches',
-          icon: Award,
-          iconColor: '#4F46E5',
-          iconBg: '#EEF2FF',
-        },
-        {
-          title: 'Standard Analytics',
-          description: 'Track daily visitor and session trends',
-          icon: Sparkles,
-          iconColor: '#DC2626',
-          iconBg: '#FEF2F2',
-        },
-      ],
-    },
-    Diamond: {
-      bgColor: '#1E1B4B',
-      glow1: '#6366F1',
-      glow2: '#A855F7',
-      badge: 'DIAMOND',
-      id: 'MEM-8829-DMD',
-      level: 'PREMIUM PARTNER',
-      benefits: [
-        {
-          title: '0% Platform Commission',
-          description: 'Keep 100% of your earnings on every order',
-          icon: Percent,
-          iconColor: '#16A34A',
-          iconBg: '#F0FDF4',
-        },
-        {
-          title: 'Priority Store Listing',
-          description: 'Appear first in local buyer searches',
-          icon: Award,
-          iconColor: '#4F46E5',
-          iconBg: '#EEF2FF',
-        },
-        {
-          title: 'Advanced Analytics',
-          description: 'Get detailed insights about visitor behavior',
-          icon: Sparkles,
-          iconColor: '#DC2626',
-          iconBg: '#FEF2F2',
-        },
-      ],
-    },
-  };
-
-  const tierRanks = {
-    Silver: 1,
-    Gold: 2,
-    Diamond: 3,
   };
 
   // Notification States
@@ -758,9 +675,6 @@ export default function HomeScreen({
   };
 
   const safeItems = Array.isArray(items) ? items.filter(Boolean) : [];
-  const safePurchasedTier: 'Silver' | 'Gold' | 'Diamond' = (purchasedTier === 'Gold' || purchasedTier === 'Diamond') ? purchasedTier : 'Silver';
-  const safeSelectedTier: 'Silver' | 'Gold' | 'Diamond' = (selectedTier === 'Gold' || selectedTier === 'Diamond') ? selectedTier : 'Silver';
-  const currentTier = tierConfig[safeSelectedTier] || tierConfig.Silver;
 
   const activeCategories = baseCategories
     .map(cat => {
@@ -835,8 +749,8 @@ export default function HomeScreen({
             style={[
               tw`rounded-2xl p-5 overflow-hidden`,
               {
-                backgroundColor: (tierConfig[safePurchasedTier] || tierConfig.Silver)?.bgColor || '#4F46E5',
-                shadowColor: (tierConfig[safePurchasedTier] || tierConfig.Silver)?.bgColor || '#4F46E5',
+                backgroundColor: '#4F46E5',
+                shadowColor: '#4F46E5',
                 shadowOffset: { width: 0, height: 8 },
                 shadowOpacity: 0.3,
                 shadowRadius: 16,
@@ -1441,10 +1355,9 @@ export default function HomeScreen({
                 { label: 'Queries & Support', icon: Headphones, action: () => handleMenuPress('Queries') },
                 { label: 'Customers', icon: User, action: () => handleMenuPress('Customers') },
                 { label: 'Delivery Partners', icon: Truck, action: () => handleMenuPress('DeliveryPartners') },
-                { label: 'Membership Card', icon: Award, action: () => { closeDrawer(); setIsMembershipVisible(true); } },
                 { label: 'Analytics', icon: TrendingUp, action: () => handleMenuPress('Payments') },
                 { label: 'Offers & Coupons', icon: Gift, action: () => { closeDrawer(); Alert.alert('Offers & Coupons', 'Create and manage promotional discounts and coupon codes.'); } },
-                { label: 'Reviews', icon: Star, action: () => { closeDrawer(); Alert.alert('Reviews & Ratings', 'Manage customer reviews and feedback.'); } },
+                { label: 'Reviews & Ratings', icon: Star, action: () => { closeDrawer(); setIsReviewsVisible(true); loadVendorRatings(); } },
               ].map(item => {
                 const Icon = item.icon;
                 return (
@@ -1635,210 +1548,149 @@ export default function HomeScreen({
         </View>
       </Modal>
 
-      {/* Membership Card Modal */}
+            {/* Customer Ratings & Reviews Modal */}
       <Modal
         animationType="slide"
         transparent={true}
-        visible={isMembershipVisible}
-        onRequestClose={() => setIsMembershipVisible(false)}>
+        visible={isReviewsVisible}
+        onRequestClose={() => setIsReviewsVisible(false)}>
         <View style={[tw`flex-1 justify-end`, { backgroundColor: 'rgba(0,0,0,0.5)' }]}>
           <View style={[tw`rounded-t-3xl px-5 pt-6 pb-8 max-h-[85%]`, isDark ? tw`bg-zinc-900 border-t border-zinc-800` : tw`bg-white`]}>
             {/* Header */}
-            <View style={tw`flex-row justify-between items-center mb-6`}>
-              <Text style={[tw`text-xl font-bold`, isDark ? tw`text-white` : tw`text-gray-900`]}>Membership Card</Text>
+            <View style={tw`flex-row justify-between items-center mb-5`}>
+              <View>
+                <Text style={[tw`text-xl font-bold`, isDark ? tw`text-white` : tw`text-gray-900`]}>Customer Reviews</Text>
+                <Text style={[tw`text-xs mt-0.5`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
+                  {ratingsData.totalRatings > 0 ? `${ratingsData.totalRatings} verified customer ratings` : 'Verified order reviews'}
+                </Text>
+              </View>
               <TouchableOpacity
-                onPress={() => setIsMembershipVisible(false)}
+                onPress={() => setIsReviewsVisible(false)}
                 style={[tw`w-8 h-8 rounded-full items-center justify-center`, isDark ? tw`bg-zinc-800` : tw`bg-gray-100`]}>
                 <X size={18} color={isDark ? '#9CA3AF' : '#4B5563'} />
               </TouchableOpacity>
             </View>
 
-            {/* Membership Tier Selector */}
-            <View style={tw`flex-row bg-gray-100 p-1 rounded-xl mb-5`}>
-              {(['Silver', 'Gold', 'Diamond'] as const)
-                .filter(tier => tierRanks[tier] >= tierRanks[purchasedTier])
-                .map(tier => (
-                  <TouchableOpacity
-                    key={tier}
-                    onPress={() => {
-                      setSelectedTier(tier);
-                      setIsFlipped(false);
-                    }}
-                    style={[
-                      tw`flex-1 py-1.5 rounded-lg items-center`,
-                      selectedTier === tier ? tw`bg-white shadow-sm` : {},
-                    ]}>
-                    <Text
-                      style={[
-                        tw`text-xs font-bold`,
-                        selectedTier === tier ? tw`text-indigo-600` : tw`text-gray-500`,
-                      ]}>
-                      {tier === purchasedTier ? `${tier} (Active)` : tier}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-            </View>
-
-            {/* Glowing Card with Flip Function */}
-            <Animated.View style={[
-              tw`rounded-3xl mb-6 overflow-hidden relative shadow-lg`,
-              {
-                height: 195,
-                transform: [{ scaleX: scaleXAnim }],
-              }
-            ]}>
-              <TouchableOpacity
-                activeOpacity={0.9}
-                onPress={handleFlipCard}
-                style={[tw`w-full h-full p-6 justify-between`, { backgroundColor: currentTier.bgColor }]}
-              >
-                {/* Glow effects */}
-                <View style={[tw`absolute -right-10 -top-10 w-44 h-44 rounded-full opacity-20`, { backgroundColor: currentTier.glow1 }]} />
-                <View style={[tw`absolute -left-10 -bottom-10 w-36 h-36 rounded-full opacity-10`, { backgroundColor: currentTier.glow2 }]} />
-
-                {!isFlipped ? (
-                  /* FRONT OF CARD */
-                  <>
-                    {/* Card Header */}
-                    <View style={tw`flex-row justify-between items-start`}>
-                      <View>
-                        <Text style={tw`text-white font-black text-lg tracking-wider`}>{(activeUser?.businessName || activeUser?.name || 'VENDOR STORE').toUpperCase()}</Text>
-                        <Text style={tw`text-indigo-200 text-xs font-semibold mt-0.5`}>{currentTier.level}</Text>
-                      </View>
-                      <View style={[tw`px-3 py-1 rounded-full flex-row items-center`, { backgroundColor: 'rgba(255,255,255,0.15)' }]}>
-                        <Award size={14} color="#F59E0B" />
-                        <Text style={tw`text-white text-xs font-bold ml-1`}>{currentTier.badge}</Text>
-                      </View>
-                    </View>
-
-                    {/* Card Body */}
-                    <View>
-                      <Text style={tw`text-indigo-300 text-[10px] font-bold tracking-widest uppercase`}>Membership ID</Text>
-                      <Text style={tw`text-white font-mono text-lg tracking-widest mt-0.5`}>{`MEM-${activeUser?._id ? activeUser._id.slice(-6).toUpperCase() : 'VND001'}-${selectedTier.toUpperCase()}`}</Text>
-                    </View>
-
-                    {/* Card Footer */}
-                    <View style={tw`flex-row justify-between items-end`}>
-                      <View>
-                        <Text style={tw`text-indigo-300 text-[9px] font-semibold uppercase`}>Member Since</Text>
-                        <Text style={tw`text-white text-xs font-bold`}>{activeUser?.createdAt ? new Date(activeUser.createdAt).toLocaleDateString('en-US', { month: 'short', year: 'numeric' }) : 'Recent'}</Text>
-                      </View>
-                      <View style={tw`items-end`}>
-                        <View style={tw`bg-white p-1 rounded-lg flex-row items-center mb-1`}>
-                          {/* Barcode Graphic */}
-                          <View style={tw`w-20 h-5 flex-row justify-between items-center`}>
-                            <View style={tw`w-[2px] h-4 bg-gray-900`} />
-                            <View style={tw`w-[3px] h-4 bg-gray-900`} />
-                            <View style={tw`w-[1px] h-4 bg-gray-900`} />
-                            <View style={tw`w-[4px] h-4 bg-gray-900`} />
-                            <View style={tw`w-[1px] h-4 bg-gray-900`} />
-                            <View style={tw`w-[3px] h-4 bg-gray-900`} />
-                            <View style={tw`w-[2px] h-4 bg-gray-900`} />
-                            <View style={tw`w-[1px] h-4 bg-gray-900`} />
-                            <View style={tw`w-[2px] h-4 bg-gray-900`} />
-                          </View>
-                        </View>
-                        <Text style={[tw`text-[8px] text-indigo-200 font-semibold`, { opacity: 0.8 }]}>Tap to flip ↺</Text>
-                      </View>
-                    </View>
-                  </>
-                ) : (
-                  /* BACK OF CARD */
-                  <>
-                    {/* Magnetic Stripe */}
-                    <View style={[tw`w-full h-8 bg-zinc-950 absolute left-0`, { top: 24 }]} />
-
-                    {/* Card Back Content */}
-                    <View style={tw`mt-10 flex-row justify-between items-center`}>
-                      <View style={tw`flex-row items-center`}>
-                        {/* Signature Strip */}
-                        <View style={[tw`h-8 bg-zinc-100 rounded justify-center px-3`, { width: 140 }]}>
-                          <Text style={[tw`text-zinc-800 text-xs italic font-bold`, { fontFamily: 'serif' }]}>{activeUser?.businessName || activeUser?.name || 'Authorized Partner'}</Text>
-                        </View>
-                        {/* CVV */}
-                        <View style={tw`ml-3 bg-zinc-800 px-2 py-1.5 rounded`}>
-                          <Text style={tw`text-[10px] text-zinc-400 font-bold`}>CVV {activeUser?._id ? activeUser._id.slice(-3).toUpperCase() : '001'}</Text>
-                        </View>
-                      </View>
-                      {/* Badge seal */}
-                      <View style={[tw`w-10 h-10 rounded-full border border-white border-dashed items-center justify-center opacity-30`]}>
-                        <Award size={18} color="#FFFFFF" />
-                      </View>
-                    </View>
-
-                    {/* Terms / Disclaimer */}
-                    <View style={tw`mt-3 flex-row justify-between items-end`}>
-                      <View style={tw`flex-1 mr-4`}>
-                        <Text style={[tw`text-[8px] text-zinc-350 leading-tight`, { opacity: 0.7 }]}>
-                          This card remains property of Partner Network. Use is subject to vendor portal terms.
-                        </Text>
-                        <Text style={[tw`text-[8px] text-zinc-300 font-bold mt-1`, { opacity: 0.8 }]}>
-                          Support: 1800-PARTNER
-                        </Text>
-                      </View>
-                      <View style={tw`items-end`}>
-                        <Text style={[tw`text-[8px] text-indigo-200 font-semibold`, { opacity: 0.8 }]}>Tap to flip ↺</Text>
-                      </View>
-                    </View>
-                  </>
-                )}
-              </TouchableOpacity>
-            </Animated.View>
-
-            {/* Exclusive Tier Benefits */}
-            <Text style={tw`text-gray-900 font-bold text-base mb-3`}>Exclusive {safeSelectedTier} Benefits</Text>
-
-            <View style={tw`mb-6`}>
-              {(currentTier.benefits || []).map((benefit, index) => {
-                const BenefitIcon = benefit.icon;
-                return (
-                  <View key={index} style={tw`flex-row items-center mb-3`}>
-                    <View style={[tw`w-8 h-8 rounded-lg items-center justify-center mr-3`, { backgroundColor: benefit.iconBg }]}>
-                      <BenefitIcon size={16} color={benefit.iconColor} />
-                    </View>
-                    <View style={tw`flex-1`}>
-                      <Text style={tw`text-gray-900 font-semibold text-sm`}>{benefit.title}</Text>
-                      <Text style={tw`text-gray-400 text-xs mt-0.5`}>{benefit.description}</Text>
-                    </View>
-                  </View>
-                );
-              })}
-            </View>
-
-            {/* Buttons */}
-            {selectedTier === purchasedTier ? (
-              <View
-                style={[tw`py-3.5 rounded-2xl items-center justify-center flex-row mb-2 bg-green-50 border border-green-200`]}>
-                <Check size={18} color="#16A34A" style={tw`mr-1.5`} />
-                <Text style={tw`text-green-700 font-bold text-base`}>Active Plan</Text>
+            {loadingRatings ? (
+              <View style={tw`py-12 items-center justify-center`}>
+                <ActivityIndicator size="large" color="#4F46E5" />
+                <Text style={[tw`text-xs mt-3`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>Loading customer feedback...</Text>
               </View>
             ) : (
-              <TouchableOpacity
-                onPress={() => {
-                  Alert.alert(
-                    'Upgrade Membership',
-                    `Would you like to upgrade from ${purchasedTier} to ${selectedTier} Partner?`,
-                    [
-                      { text: 'Cancel', style: 'cancel' },
-                      {
-                        text: 'Upgrade Now',
-                        onPress: () => {
-                          setPurchasedTier(selectedTier);
-                          Alert.alert('Congratulations 🎉', `You are now a ${selectedTier.toUpperCase()} Partner!`);
-                        }
-                      }
-                    ]
-                  );
-                }}
-                style={[tw`py-3.5 rounded-2xl items-center justify-center mb-2`, { backgroundColor: '#4F46E5' }]}>
-                <Text style={tw`text-white font-bold text-base`}>Upgrade to {selectedTier} Partner</Text>
-              </TouchableOpacity>
+              <ScrollView showsVerticalScrollIndicator={false}>
+                {/* Rating Overview Card */}
+                <View style={[tw`p-4 rounded-2xl mb-4 flex-row items-center`, isDark ? tw`bg-zinc-800` : tw`bg-amber-50 border border-amber-100`]}>
+                  <View style={tw`items-center justify-center pr-5 border-r border-amber-200`}>
+                    <Text style={[tw`text-4xl font-black`, isDark ? tw`text-amber-400` : tw`text-amber-600`]}>
+                      {ratingsData.averageRating > 0 ? ratingsData.averageRating.toFixed(1) : '5.0'}
+                    </Text>
+                    <View style={tw`flex-row items-center mt-1`}>
+                      {[1, 2, 3, 4, 5].map(star => (
+                        <Star
+                          key={star}
+                          size={14}
+                          color="#F59E0B"
+                          fill={star <= Math.round(ratingsData.averageRating || 5) ? '#F59E0B' : 'transparent'}
+                        />
+                      ))}
+                    </View>
+                    <Text style={[tw`text-[10px] font-semibold mt-1`, isDark ? tw`text-zinc-400` : tw`text-amber-800`]}>
+                      {ratingsData.totalRatings} {ratingsData.totalRatings === 1 ? 'Rating' : 'Ratings'}
+                    </Text>
+                  </View>
+
+                  {/* Breakdown Bars */}
+                  <View style={tw`flex-1 pl-4`}>
+                    {[5, 4, 3, 2, 1].map(stars => {
+                      const count = ratingsData.breakdown[String(stars)] || 0;
+                      const pct = ratingsData.totalRatings > 0 ? Math.round((count / ratingsData.totalRatings) * 100) : 0;
+                      return (
+                        <View key={stars} style={tw`flex-row items-center my-0.5`}>
+                          <Text style={[tw`text-[10px] w-4 font-bold`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>{stars}★</Text>
+                          <View style={[tw`flex-1 h-2 rounded-full mx-2 overflow-hidden`, isDark ? tw`bg-zinc-700` : tw`bg-amber-200`]}>
+                            <View style={[tw`h-full rounded-full bg-amber-500`, { width: `${pct}%` }]} />
+                          </View>
+                          <Text style={[tw`text-[10px] w-6 text-right font-medium`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>{count}</Text>
+                        </View>
+                      );
+                    })}
+                  </View>
+                </View>
+
+                {/* Reviews List */}
+                <Text style={[tw`text-xs font-bold uppercase tracking-wider mb-2.5`, isDark ? tw`text-zinc-400` : tw`text-gray-700`]}>
+                  Recent Reviews
+                </Text>
+
+                {ratingsData.reviews.length === 0 ? (
+                  <View style={[tw`p-6 rounded-2xl items-center justify-center my-2`, isDark ? tw`bg-zinc-800` : tw`bg-gray-50 border border-gray-150`]}>
+                    <Star size={32} color="#D1D5DB" />
+                    <Text style={[tw`font-bold text-sm mt-2 text-center`, isDark ? tw`text-white` : tw`text-gray-700`]}>No Customer Reviews Yet</Text>
+                    <Text style={[tw`text-xs text-center mt-1`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
+                      Ratings submitted by customers upon completing orders and bookings will be listed here.
+                    </Text>
+                  </View>
+                ) : (
+                  ratingsData.reviews.map((rev, idx) => (
+                    <View
+                      key={rev.id || idx}
+                      style={[
+                        tw`p-3.5 rounded-2xl mb-2.5`,
+                        isDark ? tw`bg-zinc-800` : tw`bg-gray-50 border border-gray-100`
+                      ]}>
+                      <View style={tw`flex-row justify-between items-start`}>
+                        <View style={tw`flex-row items-center flex-1`}>
+                          <View style={[tw`w-8 h-8 rounded-full items-center justify-center mr-2.5`, { backgroundColor: '#EEF2FF' }]}>
+                            <User size={16} color="#4F46E5" />
+                          </View>
+                          <View style={tw`flex-1`}>
+                            <Text style={[tw`font-bold text-xs`, isDark ? tw`text-white` : tw`text-gray-900`]}>
+                              {rev.customerName || 'Verified Customer'}
+                            </Text>
+                            {rev.orderId ? (
+                              <Text style={[tw`text-[10px]`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
+                                Order #{rev.orderId}
+                              </Text>
+                            ) : null}
+                          </View>
+                        </View>
+                        <View style={tw`items-end`}>
+                          <View style={tw`flex-row items-center`}>
+                            {[1, 2, 3, 4, 5].map(s => (
+                              <Star
+                                key={s}
+                                size={12}
+                                color="#F59E0B"
+                                fill={s <= (rev.rating || 5) ? '#F59E0B' : 'transparent'}
+                              />
+                            ))}
+                          </View>
+                          {rev.createdAt ? (
+                            <Text style={[tw`text-[9px] mt-0.5`, isDark ? tw`text-zinc-400` : tw`text-gray-400`]}>
+                              {new Date(rev.createdAt).toLocaleDateString()}
+                            </Text>
+                          ) : null}
+                        </View>
+                      </View>
+                      {rev.comment ? (
+                        <Text style={[tw`text-xs mt-2 leading-relaxed`, isDark ? tw`text-zinc-200` : tw`text-gray-700`]}>
+                          "{rev.comment}"
+                        </Text>
+                      ) : (
+                        <Text style={[tw`text-xs mt-1.5 italic`, isDark ? tw`text-zinc-500` : tw`text-gray-400`]}>
+                          Customer gave a {rev.rating}★ rating without written comments.
+                        </Text>
+                      )}
+                    </View>
+                  ))
+                )}
+              </ScrollView>
             )}
 
             <TouchableOpacity
-              onPress={() => setIsMembershipVisible(false)}
-              style={[tw`py-3 rounded-2xl items-center justify-center border border-gray-200 bg-gray-50`]}>
-              <Text style={tw`text-gray-500 font-bold text-sm`}>Done</Text>
+              onPress={() => setIsReviewsVisible(false)}
+              style={[tw`py-3 mt-3 rounded-2xl items-center justify-center`, isDark ? tw`bg-zinc-800` : tw`bg-gray-100`]}>
+              <Text style={[tw`font-bold text-sm`, isDark ? tw`text-zinc-300` : tw`text-gray-700`]}>Close</Text>
             </TouchableOpacity>
           </View>
         </View>

@@ -1,5 +1,6 @@
 import React, {useState, useEffect} from 'react';
-import { getVendorUser, updateProfile, fetchProfile } from '../services/apiService';
+import { getVendorUser, updateProfile, fetchProfile, updateAcceptingOrders } from '../services/apiService';
+import sessionManager from '../services/sessionManager';
 import {
   View,
   Text,
@@ -72,6 +73,11 @@ export default function ProfileScreen({
       const res = await fetchProfile();
       if (res && res.success && res.user) {
         setCurrentUser(res.user);
+        if (res.user.isAcceptingOrders !== undefined) {
+          setStoreOpen(Boolean(res.user.isAcceptingOrders));
+        } else if (res.user.acceptingOrders !== undefined) {
+          setStoreOpen(Boolean(res.user.acceptingOrders));
+        }
       }
     } catch (err) {
       console.warn('[ProfileScreen] Failed to load fresh profile:', err);
@@ -89,141 +95,45 @@ export default function ProfileScreen({
     loadFreshProfile();
   };
 
-  const [storeOpen, setStoreOpen] = useState(true);
+  const initialUser = getVendorUser();
+  const [storeOpen, setStoreOpen] = useState(() => {
+    if (initialUser?.isAcceptingOrders !== undefined) return Boolean(initialUser.isAcceptingOrders);
+    if (initialUser?.acceptingOrders !== undefined) return Boolean(initialUser.acceptingOrders);
+    return true;
+  });
+  const [updatingStoreStatus, setUpdatingStoreStatus] = useState(false);
   const [notifications, setNotifications] = useState(true);
 
   // Modal Visibility States
-  const [isMembershipVisible, setIsMembershipVisible] = useState(false);
   const [isBusinessSettingsVisible, setIsBusinessSettingsVisible] = useState(false);
   const [isSavedFeedback, setIsSavedFeedback] = useState(false);
   const [isThemeModalVisible, setIsThemeModalVisible] = useState(false);
 
-  // Membership Tier State & Config
-  const [selectedTier, setSelectedTier] = useState<'Silver' | 'Gold' | 'Diamond'>(purchasedTier);
-
-  React.useEffect(() => {
-    setSelectedTier(purchasedTier);
-  }, [purchasedTier]);
-
-  // Card Flip Animation State
-  const [isFlipped, setIsFlipped] = useState(false);
-  const scaleXAnim = React.useRef(new Animated.Value(1)).current;
-
-  const handleFlipCard = () => {
-    Animated.timing(scaleXAnim, {
-      toValue: 0,
-      duration: 150,
-      useNativeDriver: true,
-    }).start(() => {
-      setIsFlipped(prev => !prev);
-      Animated.timing(scaleXAnim, {
-        toValue: 1,
-        duration: 150,
-        useNativeDriver: true,
-      }).start();
-    });
-  };
-
-  const tierConfig = {
-    Silver: {
-      bgColor: '#4B5563',
-      glow1: '#9CA3AF',
-      glow2: '#D1D5DB',
-      badge: 'SILVER',
-      id: 'MEM-8829-SLV',
-      level: 'SILVER PARTNER',
-      benefits: [
-        {
-          title: '5% Platform Commission',
-          description: 'Keep 95% of your earnings on every order',
-          icon: Percent,
-          iconColor: '#16A34A',
-          iconBg: '#F0FDF4',
-        },
-        {
-          title: 'Standard Store Listing',
-          description: 'Appear in local searches within your area',
-          icon: Award,
-          iconColor: '#4F46E5',
-          iconBg: '#EEF2FF',
-        },
-        {
-          title: 'Basic Analytics',
-          description: 'Track daily visitor counts and page views',
-          icon: Sparkles,
-          iconColor: '#DC2626',
-          iconBg: '#FEF2F2',
-        },
-      ],
-    },
-    Gold: {
-      bgColor: '#B45309',
-      glow1: '#F59E0B',
-      glow2: '#FBBF24',
-      badge: 'GOLD',
-      id: 'MEM-8829-GLD',
-      level: 'GOLD PARTNER',
-      benefits: [
-        {
-          title: '2% Platform Commission',
-          description: 'Keep 98% of your earnings on every order',
-          icon: Percent,
-          iconColor: '#16A34A',
-          iconBg: '#F0FDF4',
-        },
-        {
-          title: 'Priority Store Listing',
-          description: 'Appear higher in local searches',
-          icon: Award,
-          iconColor: '#4F46E5',
-          iconBg: '#EEF2FF',
-        },
-        {
-          title: 'Standard Analytics',
-          description: 'Track daily visitor and session trends',
-          icon: Sparkles,
-          iconColor: '#DC2626',
-          iconBg: '#FEF2F2',
-        },
-      ],
-    },
-    Diamond: {
-      bgColor: '#1E1B4B',
-      glow1: '#6366F1',
-      glow2: '#A855F7',
-      badge: 'DIAMOND',
-      id: 'MEM-8829-DMD',
-      level: 'PREMIUM PARTNER',
-      benefits: [
-        {
-          title: '0% Platform Commission',
-          description: 'Keep 100% of your earnings on every order',
-          icon: Percent,
-          iconColor: '#16A34A',
-          iconBg: '#F0FDF4',
-        },
-        {
-          title: 'Priority Store Listing',
-          description: 'Appear first in local buyer searches',
-          icon: Award,
-          iconColor: '#4F46E5',
-          iconBg: '#EEF2FF',
-        },
-        {
-          title: 'Advanced Analytics',
-          description: 'Get detailed insights about visitor behavior',
-          icon: Sparkles,
-          iconColor: '#DC2626',
-          iconBg: '#FEF2F2',
-        },
-      ],
-    },
-  };
-
-  const tierRanks = {
-    Silver: 1,
-    Gold: 2,
-    Diamond: 3,
+  const handleToggleAcceptingOrders = async (val: boolean) => {
+    if (updatingStoreStatus) return;
+    setUpdatingStoreStatus(true);
+    const prev = storeOpen;
+    setStoreOpen(val);
+    try {
+      const res = await updateAcceptingOrders(val);
+      if (!res.success) {
+        setStoreOpen(prev);
+        Alert.alert('Update Failed', res.message || 'Unable to update store order acceptance status.');
+      } else {
+        if (currentUser) {
+          setCurrentUser({
+            ...currentUser,
+            isAcceptingOrders: val,
+            acceptingOrders: val,
+          });
+        }
+      }
+    } catch (err: any) {
+      setStoreOpen(prev);
+      Alert.alert('Error', err.message || 'Failed to update store order acceptance status.');
+    } finally {
+      setUpdatingStoreStatus(false);
+    }
   };
 
   // Business settings fields
@@ -301,6 +211,28 @@ export default function ProfileScreen({
   }, [isBusinessSettingsVisible, currentUser]);
 
   const handleSaveSettings = async () => {
+    if (mobileNumber) {
+      const cleanMob = mobileNumber.replace(/[^0-9]/g, '');
+      if (!/^[6-9]\d{9}$/.test(cleanMob)) {
+        Alert.alert('Invalid Mobile Number', 'Please enter a valid 10-digit Indian mobile number starting with 6, 7, 8, or 9.');
+        return;
+      }
+    }
+    if (panNo) {
+      const cleanPan = panNo.trim().toUpperCase();
+      if (!/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(cleanPan)) {
+        Alert.alert('Invalid PAN Format', 'Please enter a valid 10-character Indian PAN number (e.g. ABCDE1234F).');
+        return;
+      }
+    }
+    if (ifscCode) {
+      const cleanIfsc = ifscCode.trim().toUpperCase();
+      if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(cleanIfsc)) {
+        Alert.alert('Invalid IFSC Code', 'Please enter a valid 11-character Indian IFSC code (e.g. SBIN0001234).');
+        return;
+      }
+    }
+
     setSavingSettings(true);
     try {
       const payload = {
@@ -384,8 +316,8 @@ export default function ProfileScreen({
             <View style={tw`flex-row items-center`}>
               <Text style={[tw`text-xl font-bold`, isDark ? tw`text-white` : tw`text-gray-900`]}>{currentUser?.name || 'Vendor'}</Text>
               <View style={[tw`ml-2 px-2 py-0.5 rounded-full flex-row items-center`, {backgroundColor: '#EEF2FF'}]}>
-                <Sparkles size={10} color="#4F46E5" />
-                <Text style={tw`text-indigo-600 text-xs font-bold ml-0.5`}>Pro</Text>
+                <Building2 size={10} color="#4F46E5" />
+                <Text style={tw`text-indigo-600 text-xs font-bold ml-0.5`}>Vendor</Text>
               </View>
             </View>
             <Text style={[tw`text-xs mt-0.5 font-semibold`, isDark ? tw`text-indigo-400` : tw`text-indigo-600`]}>{currentUser?.businessName ? `${currentUser.businessName} • Vendor` : 'Vendor'}</Text>
@@ -395,34 +327,50 @@ export default function ProfileScreen({
             </View>
 
             {/* Verification Badges */}
-            <View style={tw`flex-row items-center mt-1.5`}>
-              <View style={[
-                tw`px-2 py-0.5 rounded-md flex-row items-center mr-2`,
-                currentUser?.isApproved ? { backgroundColor: '#ECFDF5' } : { backgroundColor: '#FEF3C7' }
-              ]}>
-                {currentUser?.isApproved ? (
-                  <CheckCircle2 size={10} color="#059669" />
-                ) : (
-                  <Clock size={10} color="#D97706" />
-                )}
-                <Text style={[
-                  tw`text-[10px] font-bold ml-1`,
-                  currentUser?.isApproved ? tw`text-emerald-700` : tw`text-amber-700`
-                ]}>
-                  {currentUser?.isApproved ? 'Verified Vendor' : 'Approval Pending'}
-                </Text>
-              </View>
+            {(() => {
+              const isApprovedVendor = 
+                Boolean(currentUser?.isApproved) ||
+                ['active', 'approved', 'assigned'].includes(String(currentUser?.status || '').toLowerCase()) ||
+                ['approved', 'active'].includes(String(currentUser?.approvalStatus || '').toLowerCase());
+              
+              const rawKyc = String(currentUser?.kycStatus || '').trim().toLowerCase();
+              const isKycVerified = ['verified', 'approved', 'completed'].includes(rawKyc) || (isApprovedVendor && (!rawKyc || rawKyc === 'pending'));
+              const kycDisplay = isKycVerified ? 'Verified' : (currentUser?.kycStatus || 'Pending');
 
-              <View style={[
-                tw`px-2 py-0.5 rounded-md flex-row items-center`,
-                currentUser?.kycStatus === 'Verified' ? { backgroundColor: '#EEF2FF' } : { backgroundColor: '#F3F4F6' }
-              ]}>
-                <Shield size={10} color="#4F46E5" />
-                <Text style={tw`text-indigo-700 text-[10px] font-bold ml-1`}>
-                  {currentUser?.kycStatus ? `KYC: ${currentUser.kycStatus}` : 'KYC: Pending'}
-                </Text>
-              </View>
-            </View>
+              return (
+                <View style={tw`flex-row items-center mt-1.5`}>
+                  <View style={[
+                    tw`px-2 py-0.5 rounded-md flex-row items-center mr-2`,
+                    isApprovedVendor ? { backgroundColor: '#ECFDF5' } : { backgroundColor: '#FEF3C7' }
+                  ]}>
+                    {isApprovedVendor ? (
+                      <CheckCircle2 size={10} color="#059669" />
+                    ) : (
+                      <Clock size={10} color="#D97706" />
+                    )}
+                    <Text style={[
+                      tw`text-[10px] font-bold ml-1`,
+                      isApprovedVendor ? tw`text-emerald-700` : tw`text-amber-700`
+                    ]}>
+                      {isApprovedVendor ? 'Verified Vendor' : 'Approval Pending'}
+                    </Text>
+                  </View>
+
+                  <View style={[
+                    tw`px-2 py-0.5 rounded-md flex-row items-center`,
+                    isKycVerified ? { backgroundColor: '#EEF2FF' } : { backgroundColor: '#FEF3C7' }
+                  ]}>
+                    <Shield size={10} color={isKycVerified ? '#4F46E5' : '#D97706'} />
+                    <Text style={[
+                      tw`text-[10px] font-bold ml-1`,
+                      isKycVerified ? tw`text-indigo-700` : tw`text-amber-700`
+                    ]}>
+                      KYC: {kycDisplay}
+                    </Text>
+                  </View>
+                </View>
+              );
+            })()}
           </View>
         </View>
 
@@ -488,17 +436,25 @@ export default function ProfileScreen({
                       </Text>
                     </View>
                   </View>
-                  <View style={[
-                    tw`px-2 py-0.5 rounded-full flex-row items-center`,
-                    biz.isApproved ? { backgroundColor: '#ECFDF5' } : { backgroundColor: '#FEF3C7' }
-                  ]}>
-                    <Text style={[
-                      tw`text-[10px] font-bold`,
-                      biz.isApproved ? tw`text-emerald-700` : tw`text-amber-700`
-                    ]}>
-                      {biz.isApproved ? 'Approved' : 'Pending Approval'}
-                    </Text>
-                  </View>
+                  {(() => {
+                    const isApprovedBiz = 
+                      biz.isApproved === true || 
+                      biz.isActive === true || 
+                      ['active', 'approved'].includes(String(biz.status || '').toLowerCase());
+                    return (
+                      <View style={[
+                        tw`px-2 py-0.5 rounded-full flex-row items-center`,
+                        isApprovedBiz ? { backgroundColor: '#ECFDF5' } : { backgroundColor: '#FEF3C7' }
+                      ]}>
+                        <Text style={[
+                          tw`text-[10px] font-bold`,
+                          isApprovedBiz ? tw`text-emerald-700` : tw`text-amber-700`
+                        ]}>
+                          {isApprovedBiz ? 'Approved' : 'Pending Approval'}
+                        </Text>
+                      </View>
+                    );
+                  })()}
                 </View>
               ))}
             </View>
@@ -506,7 +462,7 @@ export default function ProfileScreen({
         )}
 
         {/* Store Settings Section */}
-        <Text style={tw`text-gray-400 text-xs font-bold uppercase tracking-wider mb-2.5 ml-1`}>Store Status</Text>
+        <Text style={[tw`text-xs font-bold uppercase tracking-wider mb-2.5 ml-1`, isDark ? tw`text-zinc-400` : tw`text-gray-700`]}>Store Status</Text>
         <View
           style={[
             tw`bg-white rounded-2xl p-4 mb-4`,
@@ -526,12 +482,13 @@ export default function ProfileScreen({
               </View>
               <View>
                 <Text style={[tw`font-bold text-sm`, isDark ? tw`text-white` : tw`text-gray-900`]}>Accepting Orders</Text>
-                <Text style={[tw`text-xs mt-0.5`, isDark ? tw`text-zinc-400` : tw`text-gray-400`]}>Toggle to temporarily close shop</Text>
+                <Text style={[tw`text-xs mt-0.5`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>Toggle to pause or resume incoming orders</Text>
               </View>
             </View>
             <Switch
               value={storeOpen}
-              onValueChange={setStoreOpen}
+              onValueChange={handleToggleAcceptingOrders}
+              disabled={updatingStoreStatus}
               trackColor={{false: '#E5E7EB', true: '#BFDBFE'}}
               thumbColor={storeOpen ? '#2563EB' : '#9CA3AF'}
             />
@@ -539,7 +496,7 @@ export default function ProfileScreen({
         </View>
 
         {/* Business & Membership Section */}
-        <Text style={[tw`text-xs font-bold uppercase tracking-wider mb-2.5 ml-1`, isDark ? tw`text-zinc-500` : tw`text-gray-400`]}>Business & Operations</Text>
+        <Text style={[tw`text-xs font-bold uppercase tracking-wider mb-2.5 ml-1`, isDark ? tw`text-zinc-400` : tw`text-gray-700`]}>Business & Operations</Text>
         <View
           style={[
             tw`rounded-2xl overflow-hidden mb-4`,
@@ -614,7 +571,7 @@ export default function ProfileScreen({
               </View>
               <View>
                 <Text style={[tw`font-bold text-sm`, isDark ? tw`text-white` : tw`text-gray-900`]}>Queries & Support</Text>
-                <Text style={[tw`text-xs mt-0.5`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>Direct tickets with Super Admin</Text>
+                <Text style={[tw`text-xs mt-0.5`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>Direct tickets with Super Admin</Text>
               </View>
             </View>
             <ChevronRight size={18} color="#9CA3AF" />
@@ -631,7 +588,7 @@ export default function ProfileScreen({
               </View>
               <View>
                 <Text style={[tw`font-bold text-sm`, isDark ? tw`text-white` : tw`text-gray-900`]}>Delivery Partners</Text>
-                <Text style={[tw`text-xs mt-0.5`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>Fleet riders and delivery agents</Text>
+                <Text style={[tw`text-xs mt-0.5`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>Fleet riders and delivery agents</Text>
               </View>
             </View>
             <ChevronRight size={18} color="#9CA3AF" />
@@ -648,29 +605,7 @@ export default function ProfileScreen({
               </View>
               <View>
                 <Text style={[tw`font-bold text-sm`, isDark ? tw`text-white` : tw`text-gray-900`]}>Customer Directory</Text>
-                <Text style={[tw`text-xs mt-0.5`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>View customer profiles & purchase history</Text>
-              </View>
-            </View>
-            <ChevronRight size={18} color="#9CA3AF" />
-          </TouchableOpacity>
-
-          {/* Membership Card */}
-          <TouchableOpacity 
-            onPress={() => setIsMembershipVisible(true)}
-            activeOpacity={0.7}
-            style={[tw`flex-row items-center justify-between p-4`, isDark ? tw`border-b border-zinc-800` : tw`border-b border-gray-50`]}>
-            <View style={tw`flex-row items-center`}>
-              <View style={[tw`w-10 h-10 rounded-xl items-center justify-center mr-3`, isDark ? tw`bg-zinc-800` : {backgroundColor: '#FFF7ED'}]}>
-                <CreditCard size={20} color="#EA580C" />
-              </View>
-              <View>
-                <View style={tw`flex-row items-center`}>
-                  <Text style={[tw`font-bold text-sm`, isDark ? tw`text-white` : tw`text-gray-900`]}>Membership Card</Text>
-                  <View style={[tw`ml-2 px-1.5 py-0.5 rounded-full`, {backgroundColor: '#FEF3C7'}]}>
-                    <Text style={tw`text-amber-800 text-[8px] font-black`}>PRO</Text>
-                  </View>
-                </View>
-                <Text style={[tw`text-xs mt-0.5`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>View your Pro membership & benefits</Text>
+                <Text style={[tw`text-xs mt-0.5`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>View customer profiles & purchase history</Text>
               </View>
             </View>
             <ChevronRight size={18} color="#9CA3AF" />
@@ -687,7 +622,7 @@ export default function ProfileScreen({
               </View>
               <View>
                 <Text style={[tw`font-bold text-sm`, isDark ? tw`text-white` : tw`text-gray-900`]}>My Business</Text>
-                <Text style={[tw`text-xs mt-0.5`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>Manage services, products & catalog</Text>
+                <Text style={[tw`text-xs mt-0.5`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>Manage services, products & catalog</Text>
               </View>
             </View>
             <ChevronRight size={18} color="#9CA3AF" />
@@ -704,7 +639,7 @@ export default function ProfileScreen({
               </View>
               <View>
                 <Text style={[tw`font-bold text-sm`, isDark ? tw`text-white` : tw`text-gray-900`]}>Business Settings</Text>
-                <Text style={[tw`text-xs mt-0.5`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>Timings, delivery, payments & rules</Text>
+                <Text style={[tw`text-xs mt-0.5`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>Timings, delivery, payments & rules</Text>
               </View>
             </View>
             <ChevronRight size={18} color="#9CA3AF" />
@@ -712,7 +647,7 @@ export default function ProfileScreen({
         </View>
 
         {/* General Settings Section */}
-        <Text style={[tw`text-xs font-bold uppercase tracking-wider mb-2.5 ml-1`, isDark ? tw`text-zinc-500` : tw`text-gray-400`]}>Settings</Text>
+        <Text style={[tw`text-xs font-bold uppercase tracking-wider mb-2.5 ml-1`, isDark ? tw`text-zinc-400` : tw`text-gray-700`]}>Settings</Text>
         <View
           style={[
             tw`rounded-2xl overflow-hidden mb-4`,
@@ -757,7 +692,7 @@ export default function ProfileScreen({
               </View>
               <View>
                 <Text style={[tw`font-bold text-sm`, isDark ? tw`text-white` : tw`text-gray-900`]}>Store Profile Details</Text>
-                <Text style={[tw`text-xs mt-0.5`, isDark ? tw`text-zinc-500` : tw`text-gray-500`]}>Manage logo, contact, info</Text>
+                <Text style={[tw`text-xs mt-0.5`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>Manage logo, contact, info</Text>
               </View>
             </View>
             <ChevronRight size={18} color="#9CA3AF" />
@@ -776,7 +711,7 @@ export default function ProfileScreen({
               </View>
               <View>
                 <Text style={[tw`font-bold text-sm`, isDark ? tw`text-white` : tw`text-gray-900`]}>Security & PIN</Text>
-                <Text style={[tw`text-xs mt-0.5`, isDark ? tw`text-zinc-500` : tw`text-gray-500`]}>Change password and login pin</Text>
+                <Text style={[tw`text-xs mt-0.5`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>Change password and login pin</Text>
               </View>
             </View>
             <ChevronRight size={18} color="#9CA3AF" />
@@ -793,7 +728,7 @@ export default function ProfileScreen({
               </View>
               <View>
                 <Text style={[tw`font-bold text-sm`, isDark ? tw`text-white` : tw`text-gray-900`]}>Theme Mode</Text>
-                <Text style={[tw`text-xs mt-0.5`, isDark ? tw`text-zinc-500` : tw`text-gray-500`]}>
+                <Text style={[tw`text-xs mt-0.5`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>
                   Current: {themeMode === 'system' ? 'System Default' : themeMode === 'dark' ? 'Dark Mode' : 'Light Mode'}
                 </Text>
               </View>
@@ -803,7 +738,7 @@ export default function ProfileScreen({
         </View>
 
         {/* Support Section */}
-        <Text style={[tw`text-xs font-bold uppercase tracking-wider mb-2.5 ml-1`, isDark ? tw`text-zinc-500` : tw`text-gray-400`]}>Support</Text>
+        <Text style={[tw`text-xs font-bold uppercase tracking-wider mb-2.5 ml-1`, isDark ? tw`text-zinc-400` : tw`text-gray-700`]}>Support</Text>
         <View
           style={[
             tw`rounded-2xl overflow-hidden mb-5`,
@@ -866,224 +801,6 @@ export default function ProfileScreen({
           <Text style={tw`text-red-600 font-bold text-base ml-2`}>Log Out</Text>
         </TouchableOpacity>
       </ScrollView>
-
-      {/* Membership Card Modal */}
-      <Modal
-        animationType="slide"
-        transparent={true}
-        visible={isMembershipVisible}
-        onRequestClose={() => setIsMembershipVisible(false)}>
-        <View style={[tw`flex-1 justify-end`, {backgroundColor: 'rgba(0,0,0,0.5)'}]}>
-          <View style={tw`bg-white rounded-t-3xl px-5 pt-6 pb-8 max-h-[85%]`}>
-            {/* Header */}
-            <View style={tw`flex-row justify-between items-center mb-6`}>
-              <Text style={tw`text-xl font-bold text-gray-900`}>Membership Card</Text>
-              <TouchableOpacity
-                onPress={() => setIsMembershipVisible(false)}
-                style={tw`w-8 h-8 rounded-full bg-gray-100 items-center justify-center`}>
-                <X size={18} color="#4B5563" />
-              </TouchableOpacity>
-            </View>
-
-            {/* Membership Tier Selector */}
-            {(() => {
-              const safeSelectedTier: 'Silver' | 'Gold' | 'Diamond' = (selectedTier === 'Gold' || selectedTier === 'Diamond') ? selectedTier : 'Silver';
-              const safePurchasedTier: 'Silver' | 'Gold' | 'Diamond' = (purchasedTier === 'Gold' || purchasedTier === 'Diamond') ? purchasedTier : 'Silver';
-              const currentTier = tierConfig[safeSelectedTier] || tierConfig.Silver;
-              return (
-                <>
-            <View style={tw`flex-row bg-gray-100 p-1 rounded-xl mb-5`}>
-              {(['Silver', 'Gold', 'Diamond'] as const)
-                .filter(tier => (tierRanks[tier] || 1) >= (tierRanks[safePurchasedTier] || 1))
-                .map(tier => (
-                  <TouchableOpacity
-                    key={tier}
-                    onPress={() => {
-                      setSelectedTier(tier);
-                      setIsFlipped(false);
-                    }}
-                    style={[
-                      tw`flex-1 py-1.5 rounded-lg items-center`,
-                      safeSelectedTier === tier ? tw`bg-white shadow-sm` : {},
-                    ]}>
-                    <Text
-                      style={[
-                        tw`text-xs font-bold`,
-                        safeSelectedTier === tier ? tw`text-indigo-600` : tw`text-gray-500`,
-                      ]}>
-                      {tier === safePurchasedTier ? `${tier} (Active)` : tier}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-            </View>
-
-            {/* Glowing Card with Flip Function */}
-            <Animated.View style={[
-              tw`rounded-3xl mb-6 overflow-hidden relative shadow-lg`,
-              {
-                height: 195,
-                transform: [{ scaleX: scaleXAnim }],
-              }
-            ]}>
-              <TouchableOpacity
-                activeOpacity={0.9}
-                onPress={handleFlipCard}
-                style={[tw`w-full h-full p-6 justify-between`, { backgroundColor: currentTier.bgColor }]}
-              >
-                {/* Glow effects */}
-                <View style={[tw`absolute -right-10 -top-10 w-44 h-44 rounded-full opacity-20`, { backgroundColor: currentTier.glow1 }]} />
-                <View style={[tw`absolute -left-10 -bottom-10 w-36 h-36 rounded-full opacity-10`, { backgroundColor: currentTier.glow2 }]} />
-
-                {!isFlipped ? (
-                  /* FRONT OF CARD */
-                  <>
-                    {/* Card Header */}
-                    <View style={tw`flex-row justify-between items-start`}>
-                      <View>
-                        <Text style={tw`text-white font-black text-lg tracking-wider`}>{(currentUser?.businessName || currentUser?.name || 'VENDOR STORE').toUpperCase()}</Text>
-                        <Text style={tw`text-indigo-200 text-xs font-semibold mt-0.5`}>{currentTier.level}</Text>
-                      </View>
-                      <View style={[tw`px-3 py-1 rounded-full flex-row items-center`, {backgroundColor: 'rgba(255,255,255,0.15)'}]}>
-                        <Award size={14} color="#F59E0B" />
-                        <Text style={tw`text-white text-xs font-bold ml-1`}>{currentTier.badge}</Text>
-                      </View>
-                    </View>
-
-                    {/* Card Body */}
-                    <View>
-                      <Text style={tw`text-indigo-300 text-[10px] font-bold tracking-widest uppercase`}>Membership ID</Text>
-                      <Text style={tw`text-white font-mono text-lg tracking-widest mt-0.5`}>{`MEM-${currentUser?._id ? currentUser._id.slice(-6).toUpperCase() : 'VND001'}-${selectedTier.toUpperCase()}`}</Text>
-                    </View>
-
-                    {/* Card Footer */}
-                    <View style={tw`flex-row justify-between items-end`}>
-                      <View>
-                        <Text style={tw`text-indigo-300 text-[9px] font-semibold uppercase`}>Member Since</Text>
-                        <Text style={tw`text-white text-xs font-bold`}>{currentUser?.createdAt ? new Date(currentUser.createdAt).toLocaleDateString('en-US', { month: 'short', year: 'numeric' }) : 'Recent'}</Text>
-                      </View>
-                      <View style={tw`items-end`}>
-                        <View style={tw`bg-white p-1 rounded-lg flex-row items-center mb-1`}>
-                          {/* Barcode Graphic */}
-                          <View style={tw`w-20 h-5 flex-row justify-between items-center`}>
-                            <View style={tw`w-[2px] h-4 bg-gray-900`} />
-                            <View style={tw`w-[3px] h-4 bg-gray-900`} />
-                            <View style={tw`w-[1px] h-4 bg-gray-900`} />
-                            <View style={tw`w-[4px] h-4 bg-gray-900`} />
-                            <View style={tw`w-[1px] h-4 bg-gray-900`} />
-                            <View style={tw`w-[3px] h-4 bg-gray-900`} />
-                            <View style={tw`w-[2px] h-4 bg-gray-900`} />
-                            <View style={tw`w-[1px] h-4 bg-gray-900`} />
-                            <View style={tw`w-[2px] h-4 bg-gray-900`} />
-                          </View>
-                        </View>
-                        <Text style={[tw`text-[8px] text-indigo-200 font-semibold`, {opacity: 0.8}]}>Tap to flip ↺</Text>
-                      </View>
-                    </View>
-                  </>
-                ) : (
-                  /* BACK OF CARD */
-                  <>
-                    {/* Magnetic Stripe */}
-                    <View style={[tw`w-full h-8 bg-zinc-950 absolute left-0`, {top: 24}]} />
-
-                    {/* Card Back Content */}
-                    <View style={tw`mt-10 flex-row justify-between items-center`}>
-                      <View style={tw`flex-row items-center`}>
-                        {/* Signature Strip */}
-                        <View style={[tw`h-8 bg-zinc-100 rounded justify-center px-3`, {width: 140}]}>
-                          <Text style={[tw`text-zinc-800 text-xs italic font-bold`, {fontFamily: 'serif'}]}>{currentUser?.businessName || currentUser?.name || 'Authorized Partner'}</Text>
-                        </View>
-                        {/* CVV */}
-                        <View style={tw`ml-3 bg-zinc-800 px-2 py-1.5 rounded`}>
-                          <Text style={tw`text-[10px] text-zinc-400 font-bold`}>CVV {currentUser?._id ? currentUser._id.slice(-3).toUpperCase() : '001'}</Text>
-                        </View>
-                      </View>
-                      {/* Badge seal */}
-                      <View style={[tw`w-10 h-10 rounded-full border border-white border-dashed items-center justify-center opacity-30`]}>
-                        <Award size={18} color="#FFFFFF" />
-                      </View>
-                    </View>
-
-                    {/* Terms / Disclaimer */}
-                    <View style={tw`mt-3 flex-row justify-between items-end`}>
-                      <View style={tw`flex-1 mr-4`}>
-                        <Text style={[tw`text-[8px] text-zinc-350 leading-tight`, {opacity: 0.7}]}>
-                          This card remains property of Partner Network. Use is subject to vendor portal terms.
-                        </Text>
-                        <Text style={[tw`text-[8px] text-zinc-300 font-bold mt-1`, {opacity: 0.8}]}>
-                          Support: 1800-PARTNER
-                        </Text>
-                      </View>
-                      <View style={tw`items-end`}>
-                        <Text style={[tw`text-[8px] text-indigo-200 font-semibold`, {opacity: 0.8}]}>Tap to flip ↺</Text>
-                      </View>
-                    </View>
-                  </>
-                )}
-              </TouchableOpacity>
-            </Animated.View>
-
-            {/* Exclusive Tier Benefits */}
-            <Text style={tw`text-gray-900 font-bold text-base mb-3`}>Exclusive {safeSelectedTier} Benefits</Text>
-            
-            <View style={tw`mb-6`}>
-              {(currentTier.benefits || []).map((benefit, index) => {
-                const BenefitIcon = benefit.icon;
-                return (
-                  <View key={index} style={tw`flex-row items-center mb-3`}>
-                    <View style={[tw`w-8 h-8 rounded-lg items-center justify-center mr-3`, {backgroundColor: benefit.iconBg}]}>
-                      <BenefitIcon size={16} color={benefit.iconColor} />
-                    </View>
-                    <View style={tw`flex-1`}>
-                      <Text style={tw`text-gray-900 font-semibold text-sm`}>{benefit.title}</Text>
-                      <Text style={tw`text-gray-400 text-xs mt-0.5`}>{benefit.description}</Text>
-                    </View>
-                  </View>
-                );
-              })}
-            </View>
-                </>
-              );
-            })()}
-
-            {/* Buttons */}
-            {selectedTier === purchasedTier ? (
-              <View
-                style={[tw`py-3.5 rounded-2xl items-center justify-center flex-row mb-2 bg-green-50 border border-green-200`]}>
-                <Check size={18} color="#16A34A" style={tw`mr-1.5`} />
-                <Text style={tw`text-green-700 font-bold text-base`}>Active Plan</Text>
-              </View>
-            ) : (
-              <TouchableOpacity
-                onPress={() => {
-                  Alert.alert(
-                    'Upgrade Membership',
-                    `Would you like to upgrade from ${purchasedTier} to ${selectedTier} Partner?`,
-                    [
-                      { text: 'Cancel', style: 'cancel' },
-                      {
-                        text: 'Upgrade Now',
-                        onPress: () => {
-                          setPurchasedTier(selectedTier);
-                          Alert.alert('Congratulations 🎉', `You are now a ${selectedTier.toUpperCase()} Partner!`);
-                        }
-                      }
-                    ]
-                  );
-                }}
-                style={[tw`py-3.5 rounded-2xl items-center justify-center mb-2`, {backgroundColor: '#4F46E5'}]}>
-                <Text style={tw`text-white font-bold text-base`}>Upgrade to {selectedTier} Partner</Text>
-              </TouchableOpacity>
-            )}
-
-            <TouchableOpacity
-              onPress={() => setIsMembershipVisible(false)}
-              style={[tw`py-3 rounded-2xl items-center justify-center border border-gray-200 bg-gray-50`]}>
-              <Text style={tw`text-gray-500 font-bold text-sm`}>Done</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
 
       {/* Business Settings Modal */}
       <Modal
@@ -1445,6 +1162,7 @@ export default function ProfileScreen({
                 key={mode}
                 onPress={() => {
                   if (setThemeMode) setThemeMode(mode);
+                  sessionManager.saveThemePreference(mode).catch(() => {});
                   setIsThemeModalVisible(false);
                 }}
                 style={[tw`flex-row items-center justify-between py-3.5`, isDark ? tw`border-b border-zinc-800` : tw`border-b border-gray-100`]}>

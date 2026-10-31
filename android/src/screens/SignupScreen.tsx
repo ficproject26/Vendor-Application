@@ -115,9 +115,12 @@ export default function SignupScreen({ onNavigateToLogin, onSignup, isDark = fal
         state: 'Tamil Nadu',
         country: 'India',
         postalCode: postalCode.trim(),
-        mobileNumber: businessPhone,
+        mobileNumber: businessPhone.replace(/[^0-9]/g, ''),
         gstStatus: gstStatus,
-        panNo: panNumber,
+        panNo: panNumber.trim().toUpperCase(),
+        panDoc: panDoc || '',
+        aadhaarNo: aadhaarNumber.replace(/[^0-9]/g, ''),
+        aadhaarDoc: aadhaarDoc || '',
         companyRegNo: companyRegNo || 'N/A',
         msmeStatus: msmeStatus,
         accountHolderName: accountHolderName,
@@ -125,8 +128,8 @@ export default function SignupScreen({ onNavigateToLogin, onSignup, isDark = fal
         bankBranch: bankBranch,
         bankStreet: bankStreet,
         bankCity: bankCity,
-        accountNo: accountNo,
-        ifscCode: ifscCode,
+        accountNo: accountNo.trim(),
+        ifscCode: ifscCode.trim().toUpperCase(),
         operatingHours: operatingHours,
         businessWebsite: businessWebsite || '',
         shopLogo: shopLogo || '',
@@ -138,16 +141,17 @@ export default function SignupScreen({ onNavigateToLogin, onSignup, isDark = fal
           vendorType: canonicalType,
           category: canonicalType,
           subcategory: defaultSubcategory,
-          businessName: shopName.trim()
+          businessName: shopName.trim(),
+          status: 'Pending Pincode Admin Review',
+          isApproved: false,
+          isActive: false
         }])
       };
 
       const res = await registerVendor(payload);
       setLoading(false);
       if (res.success) {
-        Alert.alert('Registration Successful', 'Your account has been registered. Please log in.', [
-          { text: 'OK', onPress: onNavigateToLogin }
-        ]);
+        setRegistrationSuccess(true);
       } else {
         Alert.alert('Registration Failed', res.message || 'Error occurred during registration.');
       }
@@ -181,6 +185,9 @@ export default function SignupScreen({ onNavigateToLogin, onSignup, isDark = fal
 
   // STEP 3: Documents
   const [panNumber, setPanNumber] = useState('');
+  const [panDoc, setPanDoc] = useState('');
+  const [aadhaarNumber, setAadhaarNumber] = useState('');
+  const [aadhaarDoc, setAadhaarDoc] = useState('');
   const [companyRegNo, setCompanyRegNo] = useState('');
   const [gstStatus, setGstStatus] = useState('');
   const [msmeStatus, setMsmeStatus] = useState('');
@@ -198,12 +205,16 @@ export default function SignupScreen({ onNavigateToLogin, onSignup, isDark = fal
   // STEP 6: Declaration
   const [declared, setDeclared] = useState(false);
 
+  // Application Review State
+  const [registrationSuccess, setRegistrationSuccess] = useState(false);
 
-  const [uploadPickerTarget, setUploadPickerTarget] = useState<'logo' | 'images' | 'license' | null>(null);
+  const [uploadPickerTarget, setUploadPickerTarget] = useState<'logo' | 'images' | 'license' | 'panDoc' | 'aadhaarDoc' | null>(null);
 
-  const applyTargetImage = (target: 'logo' | 'images' | 'license' | null, uri: string) => {
+  const applyTargetImage = (target: 'logo' | 'images' | 'license' | 'panDoc' | 'aadhaarDoc' | null, uri: string) => {
     if (target === 'logo') setShopLogo(uri);
     else if (target === 'license') setLicenseFile(uri);
+    else if (target === 'panDoc') setPanDoc(uri);
+    else if (target === 'aadhaarDoc') setAadhaarDoc(uri);
     else if (target === 'images') {
       setBusinessImages(prev => (prev.includes(uri) ? prev : [...prev, uri]).slice(0, 5));
     }
@@ -287,10 +298,27 @@ export default function SignupScreen({ onNavigateToLogin, onSignup, isDark = fal
         Alert.alert('Required Fields', 'Please fill in all fields marked with *');
         return;
       }
+      const cleanPhone = businessPhone.replace(/[^0-9]/g, '');
+      if (!/^[6-9]\d{9}$/.test(cleanPhone)) {
+        Alert.alert('Invalid Mobile Number', 'Please enter a valid 10-digit Indian mobile number starting with 6, 7, 8, or 9.');
+        return;
+      }
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(businessEmail.trim())) {
+        Alert.alert('Invalid Email', 'Please enter a valid business email address.');
+        return;
+      }
     } else if (currentStep === 2) {
       if (!ownerName || !password || !confirmPassword) {
         Alert.alert('Required Fields', 'Please fill in all fields marked with *');
         return;
+      }
+      if (alternatePhone) {
+        const cleanAlt = alternatePhone.replace(/[^0-9]/g, '');
+        if (!/^[6-9]\d{9}$/.test(cleanAlt)) {
+          Alert.alert('Invalid Mobile Number', 'Alternate phone must be a valid 10-digit Indian mobile number starting with 6, 7, 8, or 9.');
+          return;
+        }
       }
       if (password !== confirmPassword) {
         Alert.alert('Password Mismatch', 'Password and Confirm Password do not match');
@@ -301,13 +329,33 @@ export default function SignupScreen({ onNavigateToLogin, onSignup, isDark = fal
         return;
       }
     } else if (currentStep === 3) {
-      if (!panNumber || !gstStatus || !msmeStatus || !licenseFile) {
-        Alert.alert('Required Fields', 'Please fill in all fields marked with *');
+      if (!panNumber || !aadhaarNumber || !gstStatus || !msmeStatus || !licenseFile) {
+        Alert.alert('Required Fields', 'Please fill in all document fields marked with *');
+        return;
+      }
+      const cleanPan = panNumber.trim().toUpperCase();
+      if (!/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(cleanPan)) {
+        Alert.alert('Invalid PAN Format', 'Please enter a valid Indian PAN number (e.g. ABCDE1234F).');
+        return;
+      }
+      const cleanAadhaar = aadhaarNumber.replace(/[^0-9]/g, '');
+      if (!/^\d{12}$/.test(cleanAadhaar)) {
+        Alert.alert('Invalid Aadhaar Number', 'Please enter a valid 12-digit Aadhaar number.');
         return;
       }
     } else if (currentStep === 4) {
       if (!accountHolderName || !bankName || !bankBranch || !bankStreet || !bankCity || !accountNo || !ifscCode) {
-        Alert.alert('Required Fields', 'Please fill in all fields marked with *');
+        Alert.alert('Required Fields', 'Please fill in all bank fields marked with *');
+        return;
+      }
+      const cleanAcc = accountNo.replace(/[^0-9]/g, '');
+      if (cleanAcc.length < 9 || cleanAcc.length > 18) {
+        Alert.alert('Invalid Account Number', 'Bank account number must be between 9 and 18 digits.');
+        return;
+      }
+      const cleanIfsc = ifscCode.trim().toUpperCase();
+      if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(cleanIfsc)) {
+        Alert.alert('Invalid IFSC Code', 'Please enter a valid 11-character Indian IFSC code (e.g. SBIN0001234).');
         return;
       }
     }
@@ -389,6 +437,102 @@ export default function SignupScreen({ onNavigateToLogin, onSignup, isDark = fal
       </View>
     );
   };
+
+  if (registrationSuccess) {
+    return (
+      <View style={[tw`flex-1 p-6 justify-center`, isDark ? tw`bg-zinc-950` : tw`bg-gray-50`]}>
+        <View style={[tw`rounded-3xl p-6 border shadow-sm`, isDark ? tw`bg-zinc-900 border-zinc-800` : tw`bg-white border-gray-150`]}>
+          {/* Header Icon */}
+          <View style={tw`items-center mb-5`}>
+            <View style={tw`w-16 h-16 rounded-full bg-emerald-100 items-center justify-center mb-3`}>
+              <CheckCircle2 size={36} color="#16A34A" />
+            </View>
+            <Text style={[tw`text-xl font-black text-center`, isDark ? tw`text-white` : tw`text-gray-900`]}>
+              Application Submitted Successfully!
+            </Text>
+            <Text style={[tw`text-xs text-center mt-1 font-medium`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
+              Your registration has been submitted and is awaiting administrative verification
+            </Text>
+          </View>
+
+          {/* Current Approval Sequence */}
+          <View style={[tw`rounded-2xl p-4 mb-5 border`, isDark ? tw`bg-zinc-950 border-zinc-800` : tw`bg-amber-50/50 border-amber-200`]}>
+            <View style={tw`flex-row items-center mb-3`}>
+              <View style={tw`w-2 h-2 rounded-full bg-amber-500 mr-2`} />
+              <Text style={tw`text-xs font-bold text-amber-800 uppercase tracking-wider`}>
+                Current Status: Under Sub Admin Review
+              </Text>
+            </View>
+
+            {/* Stages */}
+            <View style={tw`gap-3`}>
+              {/* Stage 1 */}
+              <View style={tw`flex-row items-start`}>
+                <View style={tw`w-5 h-5 rounded-full bg-emerald-500 items-center justify-center mr-3 mt-0.5`}>
+                  <Text style={tw`text-white font-black text-[10px]`}>✓</Text>
+                </View>
+                <View style={tw`flex-1`}>
+                  <Text style={tw`text-xs font-bold text-emerald-700`}>1. Vendor Registration Submitted</Text>
+                  <Text style={tw`text-[10px] text-gray-500`}>Application details and outlet profile created.</Text>
+                </View>
+              </View>
+
+              {/* Stage 2 */}
+              <View style={tw`flex-row items-start`}>
+                <View style={tw`w-5 h-5 rounded-full bg-amber-500 items-center justify-center mr-3 mt-0.5`}>
+                  <Text style={tw`text-white font-black text-[10px]`}>2</Text>
+                </View>
+                <View style={tw`flex-1`}>
+                  <Text style={tw`text-xs font-bold text-amber-800`}>2. Sub Admin Review & Approval (In Progress)</Text>
+                  <Text style={tw`text-[10px] text-amber-700`}>Pincode Admin is verifying jurisdiction, address & outlet legitimacy.</Text>
+                </View>
+              </View>
+
+              {/* Stage 3 */}
+              <View style={tw`flex-row items-start`}>
+                <View style={[tw`w-5 h-5 rounded-full items-center justify-center mr-3 mt-0.5`, isDark ? tw`bg-zinc-800` : tw`bg-gray-200`]}>
+                  <Text style={[tw`font-bold text-[10px]`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>3</Text>
+                </View>
+                <View style={tw`flex-1`}>
+                  <Text style={[tw`text-xs font-bold`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>3. KYC Verification</Text>
+                  <Text style={tw`text-[10px] text-gray-400`}>Identity team checks PAN and Aadhaar records.</Text>
+                </View>
+              </View>
+
+              {/* Stage 4 */}
+              <View style={tw`flex-row items-start`}>
+                <View style={[tw`w-5 h-5 rounded-full items-center justify-center mr-3 mt-0.5`, isDark ? tw`bg-zinc-800` : tw`bg-gray-200`]}>
+                  <Text style={[tw`font-bold text-[10px]`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>4</Text>
+                </View>
+                <View style={tw`flex-1`}>
+                  <Text style={[tw`text-xs font-bold`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>4. Payment & Activation</Text>
+                  <Text style={tw`text-[10px] text-gray-400`}>Subscription / Onboarding fee verification.</Text>
+                </View>
+              </View>
+
+              {/* Stage 5 */}
+              <View style={tw`flex-row items-start`}>
+                <View style={[tw`w-5 h-5 rounded-full items-center justify-center mr-3 mt-0.5`, isDark ? tw`bg-zinc-800` : tw`bg-gray-200`]}>
+                  <Text style={[tw`font-bold text-[10px]`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>5</Text>
+                </View>
+                <View style={tw`flex-1`}>
+                  <Text style={[tw`text-xs font-bold`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>5. Full Dashboard Access</Text>
+                  <Text style={tw`text-[10px] text-gray-400`}>Manage listings, orders, and receive customer bookings.</Text>
+                </View>
+              </View>
+            </View>
+          </View>
+
+          {/* Action */}
+          <TouchableOpacity
+            onPress={onNavigateToLogin}
+            style={[tw`py-3.5 rounded-2xl items-center justify-center`, { backgroundColor: '#4F46E5' }]}>
+            <Text style={tw`text-white font-bold text-sm`}>Go to Sign In</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
 
   return (
     <View style={tw`flex-1 bg-white`}>
@@ -741,15 +885,67 @@ export default function SignupScreen({ onNavigateToLogin, onSignup, isDark = fal
               {/* PAN Number */}
               <View style={tw`mb-4`}>
                 <Text style={tw`text-gray-700 font-semibold text-xs mb-1.5`}>
-                  PAN Number <Text style={tw`text-red-500`}>*</Text>
+                  PAN Number (10 Alphanumeric) <Text style={tw`text-red-500`}>*</Text>
                 </Text>
                 <TextInput
                   style={tw`bg-gray-50 border border-gray-150 rounded-xl px-4 py-3 text-sm font-semibold text-gray-800`}
                   value={panNumber}
-                  onChangeText={setPanNumber}
-                  placeholder="Enter PAN Number"
+                  onChangeText={(val) => setPanNumber(val.toUpperCase())}
+                  placeholder="e.g. ABCDE1234F"
                   autoCapitalize="characters"
+                  maxLength={10}
                 />
+              </View>
+
+              {/* PAN Document Upload */}
+              <View style={tw`mb-4`}>
+                <Text style={tw`text-gray-700 font-semibold text-xs mb-1.5`}>
+                  Upload PAN Card Document (Optional)
+                </Text>
+                <TouchableOpacity
+                  onPress={() => setUploadPickerTarget('panDoc')}
+                  style={tw`flex-row items-center bg-gray-50 border border-dashed border-indigo-300 rounded-xl p-3.5`}>
+                  <Upload size={18} color="#4F46E5" style={tw`mr-3`} />
+                  <View style={tw`flex-1`}>
+                    <Text style={tw`text-xs font-semibold ${panDoc ? 'text-indigo-600' : 'text-gray-500'}`}>
+                      {panDoc ? `Selected: ${panDoc.length > 25 ? panDoc.substring(0, 22) + '...' : panDoc}` : 'Upload PAN Document (Tap to select)'}
+                    </Text>
+                    <Text style={tw`text-[10px] text-gray-400 mt-0.5`}>PNG, JPG, PDF up to 5MB</Text>
+                  </View>
+                </TouchableOpacity>
+              </View>
+
+              {/* Owner Aadhaar Number */}
+              <View style={tw`mb-4`}>
+                <Text style={tw`text-gray-700 font-semibold text-xs mb-1.5`}>
+                  Owner Aadhaar Number (12 Digits) <Text style={tw`text-red-500`}>*</Text>
+                </Text>
+                <TextInput
+                  style={tw`bg-gray-50 border border-gray-150 rounded-xl px-4 py-3 text-sm font-semibold text-gray-800`}
+                  value={aadhaarNumber}
+                  onChangeText={(val) => setAadhaarNumber(val.replace(/[^0-9]/g, ''))}
+                  placeholder="e.g. 123456789012"
+                  keyboardType="numeric"
+                  maxLength={12}
+                />
+              </View>
+
+              {/* Aadhaar Document Upload */}
+              <View style={tw`mb-4`}>
+                <Text style={tw`text-gray-700 font-semibold text-xs mb-1.5`}>
+                  Upload Aadhaar Document (Optional)
+                </Text>
+                <TouchableOpacity
+                  onPress={() => setUploadPickerTarget('aadhaarDoc')}
+                  style={tw`flex-row items-center bg-gray-50 border border-dashed border-indigo-300 rounded-xl p-3.5`}>
+                  <Upload size={18} color="#4F46E5" style={tw`mr-3`} />
+                  <View style={tw`flex-1`}>
+                    <Text style={tw`text-xs font-semibold ${aadhaarDoc ? 'text-indigo-600' : 'text-gray-500'}`}>
+                      {aadhaarDoc ? `Selected: ${aadhaarDoc.length > 25 ? aadhaarDoc.substring(0, 22) + '...' : aadhaarDoc}` : 'Upload Aadhaar Document (Tap to select)'}
+                    </Text>
+                    <Text style={tw`text-[10px] text-gray-400 mt-0.5`}>PNG, JPG, PDF up to 5MB</Text>
+                  </View>
+                </TouchableOpacity>
               </View>
 
               {/* Company Registration No */}
@@ -976,11 +1172,16 @@ export default function SignupScreen({ onNavigateToLogin, onSignup, isDark = fal
                 <View style={tw`w-full h-px bg-gray-200 my-3`} />
                 <Text style={tw`text-xs font-bold text-indigo-600 uppercase tracking-wider mb-2`}>Documents</Text>
                 <View style={tw`mb-4`}>
-                  <Text style={tw`text-xs font-bold text-gray-800`}>PAN No: <Text style={tw`font-semibold text-gray-600`}>{panNumber}</Text></Text>
+                  <Text style={tw`text-xs font-bold text-gray-800`}>PAN No: <Text style={tw`font-semibold text-gray-600`}>{panNumber.toUpperCase()}</Text></Text>
+                  <Text style={tw`text-xs font-bold text-gray-800 mt-1`}>
+                    Owner Aadhaar No: <Text style={tw`font-semibold text-gray-600`}>
+                      {aadhaarNumber ? `XXXX-XXXX-${aadhaarNumber.slice(-4)}` : 'None'}
+                    </Text>
+                  </Text>
                   <Text style={tw`text-xs font-bold text-gray-800 mt-1`}>Company Reg No: <Text style={tw`font-semibold text-gray-600`}>{companyRegNo || 'None'}</Text></Text>
                   <Text style={tw`text-xs font-bold text-gray-800 mt-1`}>GST Status: <Text style={tw`font-semibold text-gray-600`}>{gstStatus}</Text></Text>
                   <Text style={tw`text-xs font-bold text-gray-800 mt-1`}>MSME Status: <Text style={tw`font-semibold text-gray-600`}>{msmeStatus}</Text></Text>
-                  <Text style={tw`text-xs font-bold text-gray-800 mt-1`}>License File: <Text style={tw`font-semibold text-gray-600`}>{licenseFile}</Text></Text>
+                  <Text style={tw`text-xs font-bold text-gray-800 mt-1`}>License File: <Text style={tw`font-semibold text-gray-600`}>{licenseFile ? 'Uploaded ✓' : 'None'}</Text></Text>
                 </View>
 
                 {/* Bank Details */}
