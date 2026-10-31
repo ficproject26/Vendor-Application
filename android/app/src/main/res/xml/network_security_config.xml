@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Base configuration allowing system certificates and cleartext for local dev fallback -->
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <!-- Explicit production domains -->
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">vendor.ficapp.in</domain>
+        <domain includeSubdomains="true">api.ficapp.in</domain>
+        <domain includeSubdomains="true">ficapp.in</domain>
+        <domain includeSubdomains="true">amazonaws.com</domain>
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </domain-config>
+
+    <!-- Explicit local development domains with cleartext permitted -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">10.0.2.2</domain>
+        <domain includeSubdomains="true">localhost</domain>
+        <domain includeSubdomains="true">127.0.0.1</domain>
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </domain-config>
+
+    <!-- Debug overrides: allow user certs for local inspection during development -->
+    <debug-overrides>
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </debug-overrides>
+</network-security-config>
