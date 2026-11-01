@@ -89,7 +89,7 @@ import NotificationBanner, { VendorActivityNotification } from './android/src/co
 import NewActivityModal from './android/src/components/NewActivityModal';
 import { socketService } from './android/src/services/socketService';
 import { soundNotificationService, NotificationTapEvent } from './android/src/services/soundNotificationService';
-import { registerDeviceToken } from './android/src/services/apiService';
+import { registerDeviceToken, unregisterDeviceToken } from './android/src/services/apiService';
 
 let messagingModule: any = null;
 try {
@@ -385,6 +385,7 @@ function App() {
 
   const handleLogout = async () => {
     try {
+      unregisterDeviceToken().catch(() => {});
       soundNotificationService.stopKeepAliveService();
       await logoutVendor();
     } catch (e) {

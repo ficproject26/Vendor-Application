@@ -1231,6 +1231,7 @@ export const registerDeviceToken = async (fcmToken: string): Promise<boolean> =>
       platform: Platform.OS,
       deviceId: `android_${userId}`,
       userId,
+      role: 'vendor',
       vendorId: user?.vendorId || user?._id || user?.id || userId,
       vendorIds,
       businessIds: user?.businesses?.map((b: any) => b._id || b.id || b.businessId) || [],
@@ -1265,6 +1266,20 @@ export const registerDeviceToken = async (fcmToken: string): Promise<boolean> =>
     return true;
   } catch (err: any) {
     console.warn('[apiService] registerDeviceToken warning:', err?.message || err);
+    return false;
+  }
+};
+
+export const unregisterDeviceToken = async (fcmToken?: string): Promise<boolean> => {
+  try {
+    const user = getVendorUser();
+    const userId = user?.vendorId || user?._id || user?.id || user?.registrationId;
+    await apiRequest('/notifications/unregister-token', {
+      method: 'POST',
+      body: JSON.stringify({ token: fcmToken, userId }),
+    });
+    return true;
+  } catch (e) {
     return false;
   }
 };
