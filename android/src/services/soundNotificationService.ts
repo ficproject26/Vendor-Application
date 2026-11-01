@@ -303,6 +303,32 @@ class SoundNotificationService {
   }
 
   /**
+   * Start native background keep-alive service to receive orders while minimized
+   */
+  startKeepAliveService() {
+    try {
+      if (OrderAlertModule && typeof OrderAlertModule.startKeepAliveService === 'function') {
+        OrderAlertModule.startKeepAliveService();
+      }
+    } catch (e: any) {
+      console.warn('[SoundNotificationService] startKeepAliveService notice:', e?.message);
+    }
+  }
+
+  /**
+   * Stop native background keep-alive service
+   */
+  stopKeepAliveService() {
+    try {
+      if (OrderAlertModule && typeof OrderAlertModule.stopKeepAliveService === 'function') {
+        OrderAlertModule.stopKeepAliveService();
+      }
+    } catch (e: any) {
+      console.warn('[SoundNotificationService] stopKeepAliveService notice:', e?.message);
+    }
+  }
+
+  /**
    * Listen for notification tap events while app is running
    */
   onNotificationTapped(listener: (event: NotificationTapEvent) => void): () => void {

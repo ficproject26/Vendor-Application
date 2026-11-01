@@ -1218,16 +1218,50 @@ export const registerDeviceToken = async (fcmToken: string): Promise<boolean> =>
   try {
     const user = getVendorUser();
     const userId = user?.vendorId || user?._id || user?.id || user?.registrationId || 'vendor';
-    const res = await apiRequest('/notifications/register-token', {
-      method: 'POST',
-      body: JSON.stringify({
-        token: fcmToken,
-        platform: Platform.OS,
-        deviceId: `android_${userId}`,
-        userId,
-      }),
-    });
-    console.log('[apiService] FCM Device token registered with backend:', res);
+    const vendorIds = [
+      user?._id,
+      user?.id,
+      user?.vendorId,
+      user?.registrationId,
+      ...(user?.businesses?.map((b: any) => b._id || b.id || b.businessId) || []),
+    ].filter(Boolean).map(String);
+
+    const payload = {
+      token: fcmToken,
+      platform: Platform.OS,
+      deviceId: `android_${userId}`,
+      userId,
+      vendorId: user?.vendorId || user?._id || user?.id || userId,
+      vendorIds,
+      businessIds: user?.businesses?.map((b: any) => b._id || b.id || b.businessId) || [],
+    };
+
+    // 1. Register with primary endpoint
+    try {
+      await apiRequest('/notifications/register-token', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+    } catch (e) {}
+
+    // 2. Also register with shared backend endpoint where FCM push service queries MongoDB
+    const socketBase = getWorkingSocketUrl();
+    const token = getGlobalToken();
+    try {
+      const resp = await fetch(`${socketBase}/api/auth/notifications/register-token`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(payload),
+      });
+      const data = await resp.json().catch(() => null);
+      console.log('✅ [apiService] FCM Device token registered with shared backend:', data);
+    } catch (sharedErr: any) {
+      console.warn('[apiService] Shared backend token registration notice:', sharedErr?.message || sharedErr);
+    }
+
     return true;
   } catch (err: any) {
     console.warn('[apiService] registerDeviceToken warning:', err?.message || err);

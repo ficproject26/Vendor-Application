@@ -47,9 +47,18 @@ class OrderAlertModule(private val reactContext: ReactApplicationContext) :
 
         fun handleNotificationIntent(intent: Intent?) {
             if (intent == null) return
-            val targetId = intent.getStringExtra("targetId") ?: intent.getStringExtra("orderId") ?: return
-            val category = intent.getStringExtra("category") ?: "Orders"
-            val segment = intent.getStringExtra("segment") ?: "Orders"
+            val targetId = intent.getStringExtra("targetId")
+                ?: intent.getStringExtra("orderId")
+                ?: intent.getStringExtra("id")
+                ?: intent.getStringExtra("applicationId")
+                ?: intent.getStringExtra("bookingId")
+                ?: intent.extras?.getString("targetId")
+                ?: intent.extras?.getString("orderId")
+                ?: intent.extras?.getString("id")
+                ?: return
+
+            val category = intent.getStringExtra("category") ?: intent.extras?.getString("category") ?: "Orders"
+            val segment = intent.getStringExtra("segment") ?: intent.extras?.getString("segment") ?: "Orders"
 
             val map = Arguments.createMap().apply {
                 putString("targetId", targetId)
@@ -354,6 +363,24 @@ class OrderAlertModule(private val reactContext: ReactApplicationContext) :
             }
         } catch (e: Exception) {
             promise.resolve(true)
+        }
+    }
+
+    @ReactMethod
+    fun startKeepAliveService() {
+        try {
+            VendorKeepAliveService.start(reactContext)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    @ReactMethod
+    fun stopKeepAliveService() {
+        try {
+            VendorKeepAliveService.stop(reactContext)
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 

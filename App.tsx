@@ -385,6 +385,7 @@ function App() {
 
   const handleLogout = async () => {
     try {
+      soundNotificationService.stopKeepAliveService();
       await logoutVendor();
     } catch (e) {
       console.warn('[App] Logout error:', e);
@@ -613,6 +614,18 @@ function App() {
 
     initNotificationsAndToken();
 
+    // Start background keep-alive service when authenticated
+    if (isLoggedIn) {
+      soundNotificationService.startKeepAliveService();
+    }
+
+    // Ensure background service stays active when app transitions to background or minimized
+    const appStateSub = AppState.addEventListener('change', (nextState) => {
+      if (isLoggedIn && (nextState === 'background' || nextState === 'inactive')) {
+        soundNotificationService.startKeepAliveService();
+      }
+    });
+
     // Listen for FCM token refresh events
     let unsubscribeTokenRefresh: (() => void) | null = null;
     if (messagingModule) {
@@ -626,6 +639,7 @@ function App() {
 
     return () => {
       if (unsubscribeTokenRefresh) unsubscribeTokenRefresh();
+      appStateSub.remove();
     };
   }, [isLoggedIn]);
 
