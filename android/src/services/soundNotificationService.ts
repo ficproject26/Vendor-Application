@@ -134,15 +134,36 @@ class SoundNotificationService {
       categoryLabel = 'Daily Needs';
     }
 
-    const customerName = order.memberName || order.customer_name || 'Customer';
-    const amount = order.finalAmount || order.totalAmount || order.amount || 0;
-    const items = Array.isArray(order.items) && order.items.length > 0
-      ? order.items.map((i: any) => i.name || i.title).join(', ')
-      : (order.product_details || 'Item');
+    const customerName = order.memberName || order.customer_name || order.customerName || 'Customer';
+    const numAmount = order.finalAmount ?? order.totalAmount ?? order.amount ?? 0;
+    const cleanAmount = typeof numAmount === 'number' ? numAmount : (Number(String(numAmount).replace(/[^\d.-]/g, '')) || 0);
+    const amountStr = `₹${cleanAmount.toLocaleString('en-IN')}`;
 
-    const title = `New ${categoryLabel} Order (#${orderNumber})`;
-    const message = `${customerName} ordered ${items} • ₹${amount}`;
-    const orderId = (order._id || order.id || orderNumber).toString();
+    let itemsStr = 'Item';
+    if (Array.isArray(order.items) && order.items.length > 0) {
+      itemsStr = order.items.map((i: any) => `${i.quantity || 1}x ${i.name || i.title}`).join(', ');
+    } else if (order.product_details) {
+      itemsStr = `${order.quantity || 1}x ${order.product_details}`;
+    }
+
+    let locStr = '';
+    if (order.tableNumber || order.table_number) {
+      locStr = ` • Dine-in Table #${order.tableNumber || order.table_number}`;
+    } else if (order.roomNumber || order.room_number) {
+      locStr = ` • Room #${order.roomNumber || order.room_number}`;
+    } else {
+      const addr = order.customerAddress || order.deliveryAddress || order.customer_address || order.shippingAddress;
+      if (typeof addr === 'string' && addr.trim() && addr !== '[object Object]') {
+        locStr = ` • ${addr.trim().slice(0, 30)}`;
+      } else if (addr && typeof addr === 'object') {
+        const cityOrArea = addr.area || addr.city || addr.street;
+        if (cityOrArea) locStr = ` • ${cityOrArea}`;
+      }
+    }
+
+    const title = `New ${categoryLabel} Order #${orderNumber} (${amountStr})`;
+    const message = `${customerName}: ${itemsStr}${locStr}`;
+    const orderId = (order.order_number || order.orderNumber || order._id || order.id || orderNumber).toString();
 
     this.showSystemNotification({
       title,
@@ -234,7 +255,7 @@ class SoundNotificationService {
 
     const title = `${categoryLabel} Status Updated`;
     const message = `${itemName} (#${orderNumber}): ${statusTransition}`;
-    const orderId = (order._id || order.id || orderNumber).toString();
+    const orderId = (order.order_number || order.orderNumber || order._id || order.id || orderNumber).toString();
 
     this.showSystemNotification({
       title,

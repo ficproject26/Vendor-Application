@@ -1153,6 +1153,22 @@ export const fetchOrders = async () => {
   return [];
 };
 
+export const fetchOrderById = async (id: string): Promise<any | null> => {
+  if (!id) return null;
+  try {
+    const data = await apiRequest(`/vendor/orders/${encodeURIComponent(id)}`, {
+      method: 'GET',
+    });
+    if (data && (data.data || data.order || data.booking)) {
+      return data.data || data.order || data.booking;
+    }
+    return data || null;
+  } catch (err) {
+    console.warn('[apiService] fetchOrderById failed:', err);
+    return null;
+  }
+};
+
 export const fetchBookings = async () => {
   const data = await apiRequest('/vendor/bookings', {
     method: 'GET',

@@ -1,5 +1,5 @@
 import React, {useState, useEffect, useMemo} from 'react';
-import { fetchOrders, fetchBookings, fetchApplications, updateOrderStatus, getVendorUser, formatImageUrl } from '../services/apiService';
+import { fetchOrders, fetchBookings, fetchApplications, updateOrderStatus, getVendorUser, formatImageUrl, fetchOrderById } from '../services/apiService';
 import { socketService } from '../services/socketService';
 import { sessionManager } from '../services/sessionManager';
 import {
@@ -1084,37 +1084,225 @@ export default function OrdersScreen({
            Boolean(o.serviceName) || Boolean(o.appointment_slot) || Boolean(o.checkInDate) || Boolean(o.roomNumber);
   };
 
+  const formatStructuredAddress = (addr: any): string => {
+    if (!addr) return '';
+    if (typeof addr === 'string') {
+      const trimmed = addr.trim();
+      if (trimmed === '[object Object]' || trimmed === 'N/A' || trimmed === 'null' || trimmed === 'undefined') {
+        return '';
+      }
+      return trimmed;
+    }
+    if (typeof addr === 'object') {
+      const parts = [
+        addr.street,
+        addr.area,
+        addr.landmark,
+        addr.addressLine1,
+        addr.addressLine2,
+        addr.city,
+        addr.district,
+        addr.state,
+        addr.pincode || addr.zipCode,
+      ].filter(Boolean);
+      if (parts.length > 0) return parts.join(', ');
+      if (addr.name || addr.address) return formatStructuredAddress(addr.address || addr.name);
+    }
+    return '';
+  };
+
+  const resolveCustomerLocation = (o: any): string => {
+    if (!o) return '';
+    if (o.tableNumber || o.table_number) {
+      return `Dine-in: Table #${o.tableNumber || o.table_number}`;
+    }
+    if (o.roomNumber || o.room_number) {
+      return `Room Delivery: Room #${o.roomNumber || o.room_number}`;
+    }
+    const candidate = o.customerAddress || o.deliveryAddress || o.customer_address || o.shippingAddress || o.serviceLocation || o.pickupLocation || o.dropLocation || o.address || o.bookingHolder?.address;
+    const formatted = formatStructuredAddress(candidate);
+    if (formatted) return formatted;
+    if (o.city || o.pincode) {
+      return [o.area, o.city, o.state, o.pincode].filter(Boolean).join(', ');
+    }
+    return '';
+  };
+
+  const transformRawToOrder = (o: any): Order => {
+    const addrStr = resolveCustomerLocation(o) || 'Delivery Address Provided with Order';
+    const totalQty = Number(o.totalQuantity || (o.items && Array.isArray(o.items) && o.items.length > 0 ? o.items.reduce((acc: number, it: any) => acc + (Number(it.quantity) || 1), 0) : (o.quantity || 1)));
+    const rawPay = String(o.paymentStatus || o.payment_status || '').trim();
+    const isCod = String(o.paymentMethod || o.payment_method || '').toLowerCase().includes('cod') || String(o.paymentMethod || o.payment_method || '').toLowerCase().includes('cash');
+    let payStatus = 'Pending';
+    if (rawPay.toLowerCase() === 'paid' || o.isPaid === true) {
+      payStatus = 'Paid';
+    } else if (isCod) {
+      payStatus = 'COD Pending';
+    } else if (rawPay) {
+      payStatus = rawPay;
+    } else {
+      payStatus = 'Payment Pending';
+    }
+    const payMethod = o.paymentMethod || o.payment_method || (isCod ? 'Cash on Delivery' : 'Online / Gateway');
+    const orderCat = resolveOrderCategory(o);
+
+    return {
+      id: o.order_number || o.id || o._id,
+      dbId: o._id || o.id,
+      name: o.items && o.items.length > 0 ? o.items.map((i: any) => i.name).join(', ') : (o.product_details || o.name || 'Order Item'),
+      dateTime: o.appointment_slot || (o.createdAt ? new Date(o.createdAt).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true }) : 'Just now'),
+      amount: `₹${Number(o.finalAmount ?? o.totalAmount ?? o.amount ?? 0).toLocaleString('en-IN')}`,
+      status: o.status || 'Pending',
+      paymentStatus: payStatus,
+      paymentMethod: payMethod,
+      quantity: totalQty,
+      image: formatImageUrl(o.imageUrl || o.image || (o.items && (o.items[0]?.image || o.items[0]?.imageUrl || o.items[0]?.img)) || ''),
+      customerName: o.customer_name || o.memberName || 'Customer',
+      customerPhone: o.customerPhone || o.customer_phone || o.phone || o.memberPhone || '',
+      customerAddress: addrStr,
+      category: orderCat,
+      transactionType: 'Order' as const,
+      rawOrder: o,
+      isBusBooking: false,
+    };
+  };
+
+  const transformRawToBooking = (o: any): Booking => {
+    const isBus = isBusOrder(o);
+    const catInfo = resolveBookingCategoryInfo(o);
+    const bookingCat = catInfo.category;
+
+    const travelers = Array.isArray(o.travelers) ? o.travelers : [];
+    const primaryPassenger = travelers[0]?.name || o.memberName || o.customer_name || o.bookingHolder?.name || 'Customer';
+
+    // Precise Service Name and Package resolution
+    const GENERIC_CATS = ['electrical & solar services', 'electrical & solar', 'electrical services', 'plumbing services', 'services', 'service', 'general service', 'daily needs', 'products'];
+    let resolvedServiceName = o.serviceName;
+    let resolvedPackageName = o.packageName || (o.items && o.items[0]?.variant);
+
+    if (isBus && o.bus_name) {
+      resolvedServiceName = o.bus_name;
+    } else if (!resolvedServiceName || GENERIC_CATS.includes(String(resolvedServiceName).trim().toLowerCase())) {
+      const candidate = (o.items && o.items[0]?.name) || o.product_details || o.name || '';
+      const m = candidate.match(/^([^(•·\n\r]+)(?:\(([^)]+)\))?/);
+      if (m) {
+        resolvedServiceName = m[1].trim();
+        if (!resolvedPackageName && m[2]) resolvedPackageName = m[2].split(/[•·]/)[0].trim();
+      } else {
+        resolvedServiceName = candidate || 'Service Booking';
+      }
+    } else if (String(resolvedServiceName).includes('(')) {
+      const m = String(resolvedServiceName).match(/^([^(]+)(?:\(([^)]+)\))?/);
+      if (m) {
+        resolvedServiceName = m[1].trim();
+        if (!resolvedPackageName && m[2]) resolvedPackageName = m[2].trim();
+      }
+    }
+
+    const custPhone = o.bookingHolder?.phone || o.customerPhone || o.customer_phone || o.phone || o.memberPhone || '';
+    const rawPay = String(o.paymentStatus || o.payment_status || '').trim();
+    const isCod = String(o.paymentMethod || o.payment_method || '').toLowerCase().includes('cod') || String(o.paymentMethod || o.payment_method || '').toLowerCase().includes('cash');
+    let payStatus = 'Pending';
+    if (rawPay.toLowerCase() === 'paid' || o.isPaid === true) {
+      payStatus = 'Paid';
+    } else if (isCod) {
+      payStatus = 'COD Pending';
+    } else if (rawPay) {
+      payStatus = rawPay;
+    } else {
+      payStatus = 'Payment Pending';
+    }
+
+    // Stay properties
+    const propName = o.propertyDetails?.propertyName || o.propertyName || o.hotelName || 'Stay Property';
+    const roomName = o.roomDetails?.name || o.roomName || (o.items && o.items[0]?.name) || o.product_details || 'Deluxe Room';
+    const cInDate = o.checkInDate || (o.staySchedule && o.staySchedule.checkInDate) || 'Not provided';
+    const cInTime = o.checkInTime || (o.staySchedule && o.staySchedule.checkInTime) || '12:00 PM';
+    const cOutDate = o.checkOutDate || (o.staySchedule && o.staySchedule.checkOutDate) || 'Not provided';
+    const cOutTime = o.checkOutTime || (o.staySchedule && o.staySchedule.checkOutTime) || '11:00 AM';
+    const totalGuests = Number(o.totalGuests || o.guestCount || o.numberOfGuests || (o.adults ? (Number(o.adults) + Number(o.children || 0)) : 1));
+
+    // Travel properties
+    const travelOptName = isBus && o.bus_name ? o.bus_name : (o.vehicleDetails?.vehicleName || o.vehicleType || (o.items && o.items[0]?.name) || o.product_details || 'Travel Booking');
+    const bPoint = o.boarding_point || (typeof o.boardingPoint === 'object' ? (o.boardingPoint?.name || o.boardingPoint?.landmark) : o.boardingPoint) || o.pickupLocation || o.from || 'Origin';
+    const dPoint = o.dropping_point || (typeof o.droppingPoint === 'object' ? (o.droppingPoint?.name || o.droppingPoint?.landmark) : o.droppingPoint) || o.deliveryAddress || o.to || 'Destination';
+    const tDate = o.travelDate || o.journeyDate || o.departureDate || o.appointmentDate || o.date || (o.createdAt ? new Date(o.createdAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : 'Not provided');
+    const dTime = o.departureTime || o.appointmentTimeSlot || o.timeSlot || o.time || 'Not provided';
+    const passCount = travelers.length > 0 ? travelers.length : Number(o.passengers || o.passengerCount || o.totalGuests || 1);
+
+    // Service properties - robust schedule extraction
+    let sDate = o.serviceDate || o.appointmentDate || o.bookingDate || o.date;
+    let sTime = o.serviceTime || o.appointmentTimeSlot || o.timeSlot || o.time;
+
+    if ((!sDate || sDate === 'Not provided' || !sTime || sTime === 'Standard Slot') && o.appointment_slot) {
+      if (o.appointment_slot.includes(' at ')) {
+        const [dp, tp] = o.appointment_slot.split(' at ');
+        if (!sDate || sDate === 'Not provided') sDate = dp.trim();
+        if (!sTime || sTime === 'Standard Slot') sTime = tp.trim();
+      } else if (!sDate || sDate === 'Not provided') {
+        sDate = o.appointment_slot;
+      }
+    }
+
+    if ((!sDate || sDate === 'Not provided' || !sTime || sTime === 'Standard Slot') && o.product_details) {
+      const m = String(o.product_details).match(/[•·]\s*([A-Za-z0-9,\s]+?)\s+at\s+([0-9:AMPMapm\s]+)/);
+      if (m) {
+        if (!sDate || sDate === 'Not provided') sDate = m[1].trim();
+        if (!sTime || sTime === 'Standard Slot') sTime = m[2].trim();
+      }
+    }
+
+    const finalServiceDate = (sDate && sDate !== 'Not provided') ? sDate : (o.createdAt ? new Date(o.createdAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : 'On-Demand Service');
+    const finalServiceTime = (sTime && sTime !== 'Standard Slot') ? sTime : 'On-Demand / Flexible';
+
+    const cleanLocation = resolveCustomerLocation(o) || (bPoint && dPoint ? `${bPoint} to ${dPoint}` : '');
+
+    return {
+      id: o.order_number || o.id || o._id,
+      dbId: o._id || o.id,
+      customer: primaryPassenger,
+      serviceName: resolvedServiceName || 'Service Booking',
+      packageName: resolvedPackageName || '',
+      dateTime: o.appointment_slot || (finalServiceDate ? `${finalServiceDate} at ${finalServiceTime}` : (o.createdAt ? new Date(o.createdAt).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true }) : 'Just now')),
+      amount: `₹${Number(o.finalAmount ?? o.totalAmount ?? o.amount ?? 0).toLocaleString('en-IN')}`,
+      status: o.status || 'Pending',
+      paymentStatus: payStatus,
+      paymentMethod: o.paymentMethod || o.payment_method || '',
+      phone: custPhone,
+      customerAddress: cleanLocation || 'Location Provided with Booking',
+      serviceLocation: cleanLocation,
+      category: o.category || (bookingCat !== 'Unknown' ? bookingCat : 'Services'),
+      bookingCategory: bookingCat,
+      bookingBadgeLabel: catInfo.badgeLabel,
+      badgeColors: catInfo,
+      serviceDate: finalServiceDate,
+      serviceTime: finalServiceTime,
+      // Stay fields
+      propertyName: propName,
+      roomName: roomName,
+      checkInDate: cInDate,
+      checkInTime: cInTime,
+      checkOutDate: cOutDate,
+      checkOutTime: cOutTime,
+      guestCount: totalGuests,
+      // Travel fields
+      travelOptionName: travelOptName,
+      pickupLocation: bPoint,
+      destinationLocation: dPoint,
+      travelDate: tDate,
+      departureTime: dTime,
+      passengerCount: passCount,
+      rawOrder: o,
+      transactionType: 'Booking' as const,
+      isBusBooking: isBus,
+    };
+  };
+
   // Standard Product, Food, Daily Needs Orders (NO JOBS, NO BUS, NO BOOKINGS)
   const ordersData: Order[] = useMemo(() => {
     return (ordersRaw || [])
       .filter(o => isProductFoodDailyOrder(o))
-      .map(o => {
-        const addrStr = String(o.customerAddress || o.pickupLocation || o.customer_address || '');
-        const totalQty = Number(o.totalQuantity || (o.items && Array.isArray(o.items) && o.items.length > 0 ? o.items.reduce((acc: number, it: any) => acc + (Number(it.quantity) || 1), 0) : (o.quantity || 1)));
-        const payStatus = o.paymentStatus || o.payment_status || (['Delivered', 'Completed'].includes(o.status) ? 'Paid' : 'Pending');
-        const payMethod = o.paymentMethod || o.payment_method || '';
-        const orderCat = resolveOrderCategory(o);
-
-        return {
-          id: o.order_number || o.id || o._id,
-          dbId: o._id || o.id,
-          name: o.items && o.items.length > 0 ? o.items.map((i: any) => i.name).join(', ') : (o.product_details || o.name || 'Order Item'),
-          dateTime: o.appointment_slot || (o.createdAt ? new Date(o.createdAt).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true }) : 'Just now'),
-          amount: `₹${Number(o.finalAmount ?? o.totalAmount ?? o.amount ?? 0).toLocaleString('en-IN')}`,
-          status: o.status || 'Pending',
-          paymentStatus: payStatus,
-          paymentMethod: payMethod,
-          quantity: totalQty,
-          image: formatImageUrl(o.imageUrl || o.image || (o.items && (o.items[0]?.image || o.items[0]?.imageUrl || o.items[0]?.img)) || ''),
-          customerName: o.customer_name || o.memberName || 'Customer',
-          customerPhone: o.customerPhone || o.customer_phone || o.phone || o.memberPhone || '',
-          customerAddress: addrStr || '',
-          category: orderCat,
-          transactionType: 'Order' as const,
-          rawOrder: o,
-          isBusBooking: false,
-        };
-      })
+      .map(o => transformRawToOrder(o))
       .sort((a, b) => getTransactionTimestamp(b) - getTransactionTimestamp(a));
   }, [ordersRaw]);
 
@@ -1122,126 +1310,7 @@ export default function OrdersScreen({
   const bookingsData: Booking[] = useMemo(() => {
     return (bookingsRaw || [])
       .filter(o => isBookingItem(o))
-      .map(o => {
-        const isBus = isBusOrder(o);
-        const catInfo = resolveBookingCategoryInfo(o);
-        const bookingCat = catInfo.category;
-
-        const travelers = Array.isArray(o.travelers) ? o.travelers : [];
-        const primaryPassenger = travelers[0]?.name || o.memberName || o.customer_name || o.bookingHolder?.name || 'Customer';
-
-        // Precise Service Name and Package resolution
-        const GENERIC_CATS = ['electrical & solar services', 'electrical & solar', 'electrical services', 'plumbing services', 'services', 'service', 'general service', 'daily needs', 'products'];
-        let resolvedServiceName = o.serviceName;
-        let resolvedPackageName = o.packageName || (o.items && o.items[0]?.variant);
-
-        if (isBus && o.bus_name) {
-          resolvedServiceName = o.bus_name;
-        } else if (!resolvedServiceName || GENERIC_CATS.includes(String(resolvedServiceName).trim().toLowerCase())) {
-          const candidate = (o.items && o.items[0]?.name) || o.product_details || o.name || '';
-          const m = candidate.match(/^([^(•·\n\r]+)(?:\(([^)]+)\))?/);
-          if (m) {
-            resolvedServiceName = m[1].trim();
-            if (!resolvedPackageName && m[2]) resolvedPackageName = m[2].split(/[•·]/)[0].trim();
-          } else {
-            resolvedServiceName = candidate || 'Service Booking';
-          }
-        } else if (String(resolvedServiceName).includes('(')) {
-          const m = String(resolvedServiceName).match(/^([^(]+)(?:\(([^)]+)\))?/);
-          if (m) {
-            resolvedServiceName = m[1].trim();
-            if (!resolvedPackageName && m[2]) resolvedPackageName = m[2].trim();
-          }
-        }
-
-        const custPhone = o.bookingHolder?.phone || o.customerPhone || o.customer_phone || o.phone || o.memberPhone || '';
-        const payStatus = o.paymentStatus || o.payment_status || (['Completed', 'Delivered', 'Checked Out'].includes(o.status) ? 'Paid' : 'Pending');
-
-        // Stay properties
-        const propName = o.propertyDetails?.propertyName || o.propertyName || o.hotelName || 'Stay Property';
-        const roomName = o.roomDetails?.name || o.roomName || (o.items && o.items[0]?.name) || o.product_details || 'Deluxe Room';
-        const cInDate = o.checkInDate || (o.staySchedule && o.staySchedule.checkInDate) || 'Not provided';
-        const cInTime = o.checkInTime || (o.staySchedule && o.staySchedule.checkInTime) || '12:00 PM';
-        const cOutDate = o.checkOutDate || (o.staySchedule && o.staySchedule.checkOutDate) || 'Not provided';
-        const cOutTime = o.checkOutTime || (o.staySchedule && o.staySchedule.checkOutTime) || '11:00 AM';
-        const totalGuests = Number(o.totalGuests || o.guestCount || o.numberOfGuests || (o.adults ? (Number(o.adults) + Number(o.children || 0)) : 1));
-
-        // Travel properties
-        const travelOptName = isBus && o.bus_name ? o.bus_name : (o.vehicleDetails?.vehicleName || o.vehicleType || (o.items && o.items[0]?.name) || o.product_details || 'Travel Booking');
-        const bPoint = o.boarding_point || (typeof o.boardingPoint === 'object' ? (o.boardingPoint?.name || o.boardingPoint?.landmark) : o.boardingPoint) || o.pickupLocation || o.from || 'Origin';
-        const dPoint = o.dropping_point || (typeof o.droppingPoint === 'object' ? (o.droppingPoint?.name || o.droppingPoint?.landmark) : o.droppingPoint) || o.deliveryAddress || o.to || 'Destination';
-        const tDate = o.travelDate || o.journeyDate || o.departureDate || o.appointmentDate || o.date || (o.createdAt ? new Date(o.createdAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : 'Not provided');
-        const dTime = o.departureTime || o.appointmentTimeSlot || o.timeSlot || o.time || 'Not provided';
-        const passCount = travelers.length > 0 ? travelers.length : Number(o.passengers || o.passengerCount || o.totalGuests || 1);
-
-        // Service properties - robust schedule extraction
-        let sDate = o.serviceDate || o.appointmentDate || o.bookingDate || o.date;
-        let sTime = o.serviceTime || o.appointmentTimeSlot || o.timeSlot || o.time;
-
-        if ((!sDate || sDate === 'Not provided' || !sTime || sTime === 'Standard Slot') && o.appointment_slot) {
-          if (o.appointment_slot.includes(' at ')) {
-            const [dp, tp] = o.appointment_slot.split(' at ');
-            if (!sDate || sDate === 'Not provided') sDate = dp.trim();
-            if (!sTime || sTime === 'Standard Slot') sTime = tp.trim();
-          } else if (!sDate || sDate === 'Not provided') {
-            sDate = o.appointment_slot;
-          }
-        }
-
-        if ((!sDate || sDate === 'Not provided' || !sTime || sTime === 'Standard Slot') && o.product_details) {
-          const m = String(o.product_details).match(/[•·]\s*([A-Za-z0-9,\s]+?)\s+at\s+([0-9:AMPMapm\s]+)/);
-          if (m) {
-            if (!sDate || sDate === 'Not provided') sDate = m[1].trim();
-            if (!sTime || sTime === 'Standard Slot') sTime = m[2].trim();
-          }
-        }
-
-        const finalServiceDate = (sDate && sDate !== 'Not provided') ? sDate : (o.createdAt ? new Date(o.createdAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : 'On-Demand Service');
-        const finalServiceTime = (sTime && sTime !== 'Standard Slot') ? sTime : 'On-Demand / Flexible';
-
-        const rawAddr = o.serviceLocation || o.customerAddress || o.customer_address || o.bookingHolder?.address || o.address || '';
-        const cleanLocation = (rawAddr && rawAddr !== 'Not provided' && !rawAddr.includes('N/A (')) ? rawAddr : '';
-
-        return {
-          id: o.order_number || o.id || o._id,
-          dbId: o._id || o.id,
-          customer: primaryPassenger,
-          serviceName: resolvedServiceName || 'Service Booking',
-          packageName: resolvedPackageName || '',
-          dateTime: o.appointment_slot || (finalServiceDate ? `${finalServiceDate} at ${finalServiceTime}` : (o.createdAt ? new Date(o.createdAt).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true }) : 'Just now')),
-          amount: `₹${Number(o.finalAmount ?? o.totalAmount ?? o.amount ?? 0).toLocaleString('en-IN')}`,
-          status: o.status || 'Pending',
-          paymentStatus: payStatus,
-          paymentMethod: o.paymentMethod || o.payment_method || '',
-          phone: custPhone,
-          customerAddress: cleanLocation || o.customerAddress || o.customer_address || '',
-          serviceLocation: cleanLocation,
-          category: o.category || (bookingCat !== 'Unknown' ? bookingCat : 'Services'),
-          bookingCategory: bookingCat,
-          bookingBadgeLabel: catInfo.badgeLabel,
-          badgeColors: catInfo,
-          serviceDate: finalServiceDate,
-          serviceTime: finalServiceTime,
-          // Stay fields
-          propertyName: propName,
-          roomName: roomName,
-          checkInDate: cInDate,
-          checkInTime: cInTime,
-          checkOutDate: cOutDate,
-          checkOutTime: cOutTime,
-          guestCount: totalGuests,
-          // Travel fields
-          travelOptionName: travelOptName,
-          pickupLocation: bPoint,
-          destinationLocation: dPoint,
-          travelDate: tDate,
-          departureTime: dTime,
-          passengerCount: passCount,
-          rawOrder: o,
-          transactionType: 'Booking' as const,
-          isBusBooking: isBus,
-        };
-      })
+      .map(o => transformRawToBooking(o))
       .sort((a, b) => getTransactionTimestamp(b) - getTransactionTimestamp(a));
   }, [bookingsRaw]);
 
@@ -1250,7 +1319,8 @@ export default function OrdersScreen({
     return (jobsRaw || [])
       .filter(o => isJobItem(o))
       .map(o => {
-        const addrStr = String(o.customerAddress || o.pickupLocation || o.customer_address || '');
+        const rawCandidateAddr = o.customerAddress || o.pickupLocation || o.customer_address;
+        const addrStr = formatStructuredAddress(rawCandidateAddr) || (typeof rawCandidateAddr === 'string' ? rawCandidateAddr : '');
         let parsedEducation = o.candidateEducation || o.applicant_education || '';
         let parsedExperience = o.candidateExperience || o.applicant_experience || '';
         let parsedResume = o.candidateResume || o.resume_name || '';
@@ -1306,31 +1376,56 @@ export default function OrdersScreen({
   useEffect(() => {
     if (routeParams?.targetId) {
       const tid = String(routeParams.targetId).trim().toLowerCase();
-      if (activeSegment === 'Bookings' && bookingsData.length > 0) {
-        const found = bookingsData.find(
-          b => String(b.id).toLowerCase() === tid || String(b.dbId).toLowerCase() === tid
-        );
-        if (found) {
-          setSelectedBooking(found);
-          if (clearRouteParams) clearRouteParams();
-        }
-      } else if (activeSegment === 'Jobs' && jobsData.length > 0) {
-        const found = jobsData.find(
-          j => String(j.id).toLowerCase() === tid || String(j.dbId).toLowerCase() === tid
-        );
-        if (found) {
-          setSelectedOrder(found);
-          if (clearRouteParams) clearRouteParams();
-        }
-      } else if (activeSegment === 'Orders' && ordersData.length > 0) {
-        const found = ordersData.find(
-          o => String(o.id).toLowerCase() === tid || String(o.dbId).toLowerCase() === tid
-        );
-        if (found) {
-          setSelectedOrder(found);
-          if (clearRouteParams) clearRouteParams();
-        }
+
+      // Check local datasets first
+      const foundOrder = ordersData.find(
+        o => String(o.id).toLowerCase() === tid || String(o.dbId).toLowerCase() === tid
+      );
+      if (foundOrder) {
+        if (activeSegment !== 'Orders') setActiveSegment('Orders');
+        setSelectedOrder(foundOrder);
+        if (clearRouteParams) clearRouteParams();
+        return;
       }
+
+      const foundBooking = bookingsData.find(
+        b => String(b.id).toLowerCase() === tid || String(b.dbId).toLowerCase() === tid
+      );
+      if (foundBooking) {
+        if (activeSegment !== 'Bookings') setActiveSegment('Bookings');
+        setSelectedBooking(foundBooking);
+        if (clearRouteParams) clearRouteParams();
+        return;
+      }
+
+      const foundJob = jobsData.find(
+        j => String(j.id).toLowerCase() === tid || String(j.dbId).toLowerCase() === tid
+      );
+      if (foundJob) {
+        if (activeSegment !== 'Jobs') setActiveSegment('Jobs');
+        setSelectedOrder(foundJob);
+        if (clearRouteParams) clearRouteParams();
+        return;
+      }
+
+      // If item is not in local memory (e.g. new real-time push event), fetch directly from backend API
+      fetchOrderById(String(routeParams.targetId).trim()).then(fetched => {
+        if (fetched) {
+          if (isBookingItem(fetched)) {
+            setActiveSegment('Bookings');
+            setSelectedBooking(transformRawToBooking(fetched));
+          } else {
+            setActiveSegment(isJobItem(fetched) ? 'Jobs' : 'Orders');
+            setSelectedOrder(transformRawToOrder(fetched));
+          }
+          // Refresh active list in background silently
+          loadSegmentData(activeSegment, true);
+        }
+      }).catch(err => {
+        console.warn('Auto-fetch order by ID error:', err);
+      }).finally(() => {
+        if (clearRouteParams) clearRouteParams();
+      });
     }
   }, [routeParams?.targetId, ordersData, bookingsData, jobsData, activeSegment]);
 
@@ -2804,7 +2899,9 @@ export default function OrdersScreen({
                         </View>
                         <View style={tw`flex-row items-start pt-3`}>
                           <MapPin size={14} color="#6B7280" style={tw`mr-3 mt-0.5`} />
-                          <Text style={[tw`text-sm font-semibold flex-1`, isDark ? tw`text-zinc-300` : tw`text-gray-700`]}>{selectedOrder.customerAddress || 'Delivery Address Provided with Order'}</Text>
+                          <Text style={[tw`text-sm font-semibold flex-1`, isDark ? tw`text-zinc-300` : tw`text-gray-700`]}>
+                            {resolveCustomerLocation(selectedOrder.rawOrder || selectedOrder) || selectedOrder.customerAddress || 'Delivery Address Provided with Order'}
+                          </Text>
                         </View>
                       </View>
 
@@ -2820,7 +2917,8 @@ export default function OrdersScreen({
                         const deliveryFee = Number(rawOrd.deliveryCharge || rawOrd.deliveryFee || 0);
                         const finalAmount = Number(rawOrd.finalAmount || rawOrd.totalAmount || rawOrd.amount || (subtotal - discountApplied + deliveryFee));
                         const isCod = String(rawOrd.paymentMethod || rawOrd.payment_method || '').toLowerCase().includes('cash') || String(rawOrd.paymentMethod || rawOrd.payment_method || '').toLowerCase().includes('cod');
-                        const isPaid = rawOrd.paymentStatus === 'Paid' || ['Delivered', 'Completed'].includes(selectedOrder.status);
+                        const rawPayStatus = String(rawOrd.paymentStatus || rawOrd.payment_status || selectedOrder.paymentStatus || '').trim().toLowerCase();
+                        const isPaid = rawPayStatus === 'paid' || rawOrd.isPaid === true;
                         const txnId = rawOrd.transactionId || rawOrd.razorpayPaymentId || rawOrd.walletTxnId || (rawOrd._id ? String(rawOrd._id).slice(-10).toUpperCase() : 'N/A');
 
                         return (

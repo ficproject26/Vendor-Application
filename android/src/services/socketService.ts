@@ -217,7 +217,9 @@ class VendorSocketService {
         itemName: serviceName,
         dateTime: bookingDate,
         status,
-        amount: raw.finalAmount || raw.amount ? `₹${raw.finalAmount || raw.amount}` : undefined,
+        amount: (raw.finalAmount !== undefined || raw.amount !== undefined || raw.totalAmount !== undefined)
+          ? `₹${Number(String(raw.finalAmount ?? raw.amount ?? raw.totalAmount ?? 0).replace(/[^\d.-]/g, '') || 0).toLocaleString('en-IN')}`
+          : undefined,
         segment: 'Bookings',
         raw,
         receivedAt: Date.now(),
@@ -240,7 +242,10 @@ class VendorSocketService {
       : 'Just now';
 
     const status = raw.status || 'Placed';
-    const finalAmount = raw.finalAmount || raw.totalAmount || raw.amount || 0;
+    const rawFinalAmount = raw.finalAmount ?? raw.totalAmount ?? raw.amount ?? 0;
+    const cleanAmount = typeof rawFinalAmount === 'number'
+      ? rawFinalAmount
+      : (Number(String(rawFinalAmount).replace(/[^\d.-]/g, '')) || 0);
 
     const detailStr = String(raw.product_details || productName || '').toLowerCase();
     const isFood = ['food', 'foods', 'restaurant', 'dining'].includes(catStr) ||
@@ -261,7 +266,7 @@ class VendorSocketService {
       customerName,
       itemName: productName,
       quantity: totalQty,
-      amount: `₹${finalAmount}`,
+      amount: `₹${cleanAmount.toLocaleString('en-IN')}`,
       dateTime: orderDate,
       status,
       segment: 'Orders',

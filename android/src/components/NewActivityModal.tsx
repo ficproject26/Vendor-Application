@@ -142,14 +142,24 @@ export default function NewActivityModal({
   const isStay = isStayBooking;
   const isTravel = isTravelBooking;
 
-  const txId = String(raw.order_number || notification.id || raw.id || raw._id || 'TXN');
-  const customerName = raw.customer_name || raw.memberName || raw.candidateName || notification.customerName || 'Customer';
-  const customerPhone = raw.customer_phone || raw.customerPhone || raw.phone || raw.candidatePhone || raw.mobileNumber || '';
-  const customerEmail = raw.customer_email || raw.customerEmail || raw.candidateEmail || raw.email || '';
+  const txId = String(raw.order_number || raw.orderNumber || raw.applicationId || notification.id || raw.id || raw._id || 'TXN');
+  const customerName = raw.customer_name || raw.memberName || raw.customerName || raw.candidateName || notification.customerName || 'Customer';
+  const customerPhone = raw.customer_phone || raw.customerPhone || raw.phone || raw.memberPhone || raw.candidatePhone || raw.mobileNumber || '';
+  const customerEmail = raw.customer_email || raw.customerEmail || raw.email || raw.candidateEmail || '';
   const customerId = raw.customer_id || raw.customerId || raw.memberId || '';
 
   const dateTimeStr = notification.dateTime || (raw.createdAt ? new Date(raw.createdAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : 'Just now');
   const statusStr = raw.status || notification.status || 'Received';
+
+  // Helper to parse numeric price reliably without formatting corruption
+  const resolveNumericPrice = (val: any): number => {
+    if (typeof val === 'number') return isNaN(val) ? 0 : val;
+    if (typeof val === 'string') {
+      const cleaned = Number(val.replace(/[^\d.-]/g, ''));
+      return isNaN(cleaned) ? 0 : cleaned;
+    }
+    return 0;
+  };
 
   // Items / Breakdown
   const rawItems = Array.isArray(raw.items) && raw.items.length > 0 ? raw.items : [];
@@ -159,47 +169,73 @@ export default function NewActivityModal({
         {
           name: notification.itemName || raw.product_details || raw.name || (isJob ? 'Job Application' : 'Order Item'),
           quantity: Number(notification.quantity || raw.quantity || 1),
-          price: Number(raw.price || raw.unitPrice || 0),
+          price: resolveNumericPrice(raw.price || raw.unitPrice || 0),
           image: raw.image || raw.productImage || null,
           variant: raw.variant || raw.selectedVariant || null,
         },
       ];
 
   // Financial summary
-  const subtotal = Number(raw.subtotal || raw.itemsSubtotal || (rawItems.length > 0 ? rawItems.reduce((acc: number, it: any) => acc + (Number(it.price || 0) * Number(it.quantity || 1)), 0) : 0));
-  const discount = Number(raw.discount || raw.discountApplied || 0);
-  const deliveryFee = Number(raw.deliveryCharges || raw.deliveryFee || 0);
-  const taxes = Number(raw.taxes || raw.taxAmount || 0);
-  const totalAmount = raw.finalAmount || raw.totalAmount || raw.amount || (subtotal > 0 ? subtotal - discount + deliveryFee + taxes : null);
+  const subtotal = Number(raw.subtotal || raw.itemsSubtotal || (rawItems.length > 0 ? rawItems.reduce((acc: number, it: any) => acc + (resolveNumericPrice(it.price || it.unitPrice || 0) * Number(it.quantity || it.qty || 1)), 0) : 0));
+  const discount = resolveNumericPrice(raw.discount || raw.discountApplied || 0);
+  const deliveryFee = resolveNumericPrice(raw.deliveryCharges || raw.deliveryFee || raw.deliveryCharge || 0);
+  const taxes = resolveNumericPrice(raw.taxes || raw.taxAmount || 0);
 
-  const paymentMethod = raw.paymentMethod || raw.payment_method || (raw.isCOD ? 'Cash on Delivery' : 'Connect Wallet');
+  const rawFinalAmount = raw.finalAmount ?? raw.totalAmount ?? raw.amount ?? raw.total ?? (notification.amount ? resolveNumericPrice(notification.amount) : null);
+  const finalTotalBill = rawFinalAmount !== null && rawFinalAmount !== undefined
+    ? resolveNumericPrice(rawFinalAmount)
+    : (subtotal > 0 ? Math.max(0, subtotal - discount + deliveryFee + taxes) : 0);
+
+  const paymentMethod = raw.paymentMethod || raw.payment_method || (raw.isCOD ? 'Cash on Delivery' : 'Online / Gateway');
   const isCod = String(paymentMethod).toLowerCase().includes('cod') || String(paymentMethod).toLowerCase().includes('cash');
-  const paymentStatus = raw.paymentStatus || raw.payment_status || (isCod ? 'Pending' : 'Paid');
+  const rawPayStatus = String(raw.paymentStatus || raw.payment_status || '').trim();
+  let paymentStatus = 'Pending';
+  if (rawPayStatus.toLowerCase() === 'paid' || raw.isPaid === true) {
+    paymentStatus = 'Paid';
+  } else if (isCod) {
+    paymentStatus = 'COD Pending';
+  } else if (rawPayStatus) {
+    paymentStatus = rawPayStatus;
+  } else {
+    paymentStatus = 'Payment Pending';
+  }
 
   // Location / Address
   const getDeliveryAddress = (): string => {
+    // Check for dine-in table or room delivery first
+    if (raw.tableNumber || raw.table_number) {
+      return `Dine-in: Table #${raw.tableNumber || raw.table_number}`;
+    }
+    if (raw.roomNumber || raw.room_number) {
+      return `Room Delivery: Room #${raw.roomNumber || raw.room_number}`;
+    }
+
     const directFields = [
       raw.deliveryAddress,
       raw.customer_address,
-      raw.shippingAddress,
       raw.customerAddress,
+      raw.serviceLocation,
+      raw.customerLocation,
+      raw.shippingAddress,
       raw.address,
       raw.location,
+      raw.dropLocation,
+      raw.pickupLocation,
       raw.memberAddress,
     ];
     for (const f of directFields) {
       if (f && typeof f === 'object') {
-        const parts = [f.street, f.area, f.city, f.district, f.state, f.pincode].filter(Boolean);
+        const parts = [f.street, f.area, f.landmark, f.city, f.district, f.state, f.pincode].filter(Boolean);
         if (parts.length > 0) return parts.join(', ');
       }
-      if (typeof f === 'string' && f.trim() && f !== 'N/A') {
+      if (typeof f === 'string' && f.trim() && f !== 'N/A' && f !== '[object Object]') {
         return f.trim();
       }
     }
     if (raw.city || raw.pincode) {
-      return [raw.city, raw.state, raw.pincode].filter(Boolean).join(', ');
+      return [raw.area, raw.city, raw.state, raw.pincode].filter(Boolean).join(', ');
     }
-    return 'Not Specified';
+    return 'Delivery Address Provided with Order';
   };
 
   const deliveryAddress = getDeliveryAddress();
@@ -603,7 +639,7 @@ export default function NewActivityModal({
                 <View style={tw`flex-row justify-between items-center my-1.5 pt-1.5 border-t border-gray-200 dark:border-zinc-800`}>
                   <Text style={[tw`text-xs font-bold`, isDark ? tw`text-white` : tw`text-gray-900`]}>Total Bill:</Text>
                   <Text style={tw`text-base font-black text-emerald-600`}>
-                    {totalAmount ? (String(totalAmount).startsWith('₹') ? totalAmount : `₹${Number(totalAmount).toLocaleString('en-IN')}`) : '₹0'}
+                    ₹{finalTotalBill.toLocaleString('en-IN')}
                   </Text>
                 </View>
                 <View style={tw`flex-row justify-between items-center mt-1`}>
