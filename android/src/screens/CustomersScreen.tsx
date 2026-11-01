@@ -45,6 +45,7 @@ import {
 
 interface CustomersScreenProps {
   onNavigate?: (tab: any) => void;
+  onBack?: () => void;
   isDark?: boolean;
 }
 
@@ -80,6 +81,7 @@ export const getCustomerAvatarUrl = (c: CustomerItem): string => {
 
 export default function CustomersScreen({
   onNavigate,
+  onBack,
   isDark = false,
 }: CustomersScreenProps) {
   const insets = useSafeAreaInsets();
@@ -171,9 +173,9 @@ export default function CustomersScreen({
         ]}>
         <View style={tw`flex-row items-center justify-between`}>
           <View style={tw`flex-row items-center flex-1`}>
-            {onNavigate && (
+            {(onBack || onNavigate) && (
               <TouchableOpacity
-                onPress={() => onNavigate('Home')}
+                onPress={() => onBack ? onBack() : onNavigate?.('Home')}
                 activeOpacity={0.7}
                 style={[
                   tw`w-10 h-10 rounded-2xl items-center justify-center mr-3`,

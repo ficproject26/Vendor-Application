@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { launchCamera, launchImageLibrary } from 'react-native-image-picker';
 import { getVendorUser, setVendorUser, fetchProfile, fetchProducts, createProduct, updateProduct, deleteProduct, createBusiness, getActiveBusinessId, setActiveBusinessId, fetchAllBusinessesProducts, updateProfile, uploadImageToServer, normalizeCategory, fetchCategoryHierarchy, fetchMainCategories, applyListingOffer, removeListingOffer, formatImageUrl } from '../services/apiService';
+import { sessionManager } from '../services/sessionManager';
 import {
   View,
   Text,
@@ -15,6 +16,7 @@ import {
   ActivityIndicator,
   PermissionsAndroid,
   Platform,
+  BackHandler,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import tw from 'twrnc';
@@ -295,6 +297,9 @@ export const formatSalaryToLPA = (val: string): string => {
   return s;
 };
 
+// In-memory module cache for dynamic category hierarchy (0ms retrieval)
+const hierarchyCache: Record<string, Record<string, string[]>> = {};
+
 export default function BusinessScreen({
   items = [],
   currentUser: propUser,
@@ -332,21 +337,30 @@ export default function BusinessScreen({
   const [selectedCategory, setSelectedCategory] = useState<CategoryKey | null>(null);
 
   // Dynamic Category Hierarchy state populated from Super Admin & MongoDB Atlas
-  const [dynamicHierarchy, setDynamicHierarchy] = useState<Record<string, Record<string, string[]>>>({});
+  const [dynamicHierarchy, setDynamicHierarchy] = useState<Record<string, Record<string, string[]>>>(hierarchyCache);
+  const [togglingItemIds, setTogglingItemIds] = useState<Set<string>>(new Set());
 
   const getHierarchyForCat = (cat?: string | null): Record<string, string[]> => {
     const key = (cat || selectedCategory || activeCategory || 'Products') as CategoryKey;
     if (dynamicHierarchy[key] && Object.keys(dynamicHierarchy[key]).length > 0) {
       return dynamicHierarchy[key];
     }
+    if (hierarchyCache[key] && Object.keys(hierarchyCache[key]).length > 0) {
+      return hierarchyCache[key];
+    }
     return hierarchyMap[key] || hierarchyMap['Products'] || {};
   };
 
   const loadDynamicHierarchy = async (cat?: string | null) => {
     const target = cat || selectedCategory || activeCategory || 'Products';
+    if (hierarchyCache[target] && Object.keys(hierarchyCache[target]).length > 0) {
+      setDynamicHierarchy(prev => ({ ...prev, [target]: hierarchyCache[target] }));
+      return;
+    }
     try {
       const live = await fetchCategoryHierarchy(target);
       if (live && Object.keys(live).length > 0) {
+        hierarchyCache[target] = live;
         setDynamicHierarchy(prev => ({ ...prev, [target]: live }));
       }
     } catch (err) {
@@ -590,23 +604,59 @@ export default function BusinessScreen({
   };
 
   useEffect(() => {
+    let isMounted = true;
     const loadItems = async () => {
-      setLoading(true);
+      if (!items || items.length === 0) {
+        setLoading(true);
+      }
       try {
         const profRes = await fetchProfile();
-        if (profRes && profRes.user) {
+        if (profRes && profRes.user && isMounted) {
           syncVendorUser(profRes.user);
         }
         const fetched = await fetchAllBusinessesProducts();
-        setItems(fetched);
+        if (isMounted && Array.isArray(fetched)) {
+          setItems(fetched);
+          const vendorId = currentUser?._id || currentUser?.id || 'default';
+          sessionManager.saveVendorCache(vendorId, 'catalog_items', fetched);
+        }
       } catch (err: any) {
         console.warn("Failed to load catalog items:", err.message);
       } finally {
-        setLoading(false);
+        if (isMounted) setLoading(false);
       }
     };
     loadItems();
+    return () => {
+      isMounted = false;
+    };
   }, [activeBizId]);
+
+  // Local BackHandler for BusinessScreen: dismiss overlays/modals and navigate between tabs
+  useEffect(() => {
+    const onBackPress = () => {
+      if (isUploadModalVisible) {
+        setIsUploadModalVisible(false);
+        return true;
+      }
+      if (isOfferModalVisible) {
+        setIsOfferModalVisible(false);
+        return true;
+      }
+      if (isAddModalVisible) {
+        handleCloseModal();
+        return true;
+      }
+      if (businessViewTab === 'items') {
+        setBusinessViewTab('overview');
+        return true;
+      }
+      return false; // Let parent App.tsx handle history popping
+    };
+
+    const backSub = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+    return () => backSub.remove();
+  }, [isUploadModalVisible, isOfferModalVisible, isAddModalVisible, businessViewTab]);
 
   useEffect(() => {
     if (routeParams) {
@@ -689,9 +739,32 @@ export default function BusinessScreen({
   const filteredItems = safeItems
     .filter(i => {
       if (!i) return false;
-      if (activeCategory === 'Jobs') return isJobItem(i);
-      const iCat = normalizeCategory(i.category || (i as any).mainCategory || '');
-      return iCat === activeCategory && !isJobItem(i);
+
+      // 1. Scoped to the active business outlet if one is selected
+      if (activeBizId) {
+        const itemBizId = (i.businessId || i.vendorId || '').toString();
+        if (itemBizId) {
+          if (itemBizId !== String(activeBizId)) return false;
+        } else {
+          // Fallback if item has no businessId/vendorId: match category
+          const iCat = normalizeCategory(i.category || (i as any).mainCategory || '');
+          if (activeCategory === 'Jobs') {
+            if (!isJobItem(i)) return false;
+          } else {
+            if (iCat !== activeCategory || isJobItem(i)) return false;
+          }
+        }
+      } else {
+        // Fallback if no specific business selected: match active category
+        if (activeCategory === 'Jobs') {
+          if (!isJobItem(i)) return false;
+        } else {
+          const iCat = normalizeCategory(i.category || (i as any).mainCategory || '');
+          if (iCat !== activeCategory || isJobItem(i)) return false;
+        }
+      }
+
+      return true;
     })
     .filter(i => {
       if (!searchQuery) return true;
@@ -821,14 +894,29 @@ export default function BusinessScreen({
   };
 
   const toggleItem = async (id: string) => {
+    if (togglingItemIds.has(id)) return;
+    setTogglingItemIds(prev => new Set(prev).add(id));
     const item = items.find(i => i.id === id);
-    if (!item) return;
+    if (!item) {
+      setTogglingItemIds(prev => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+      return;
+    }
     try {
       const updatedItem = { ...item, isActive: !item.isActive };
       await updateProduct(id, updatedItem);
       setItems(prev => prev.map(i => i.id === id ? updatedItem : i));
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Failed to update item status.');
+    } finally {
+      setTogglingItemIds(prev => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
     }
   };
 
@@ -937,6 +1025,7 @@ export default function BusinessScreen({
   };
 
   const handleAddItem = async () => {
+    if (loading) return;
     if (!newItemName.trim()) {
       Alert.alert('Required', modalType === 'business' ? 'Please enter a business name' : `Please enter a ${getCategoryUnitLabel(newItemCategory).toLowerCase()} name`);
       return;
@@ -1523,6 +1612,7 @@ export default function BusinessScreen({
   };
 
   const handleDeleteItem = async (id: string) => {
+    if (loading) return;
     Alert.alert(
       'Confirm Delete',
       'Are you sure you want to delete this catalog item permanently?',
@@ -1779,6 +1869,15 @@ export default function BusinessScreen({
                 const normCat = normalizeCategory(biz.vendorType || biz.category || biz.baseVendorType);
                 const catConf = categoriesConfig.find(c => c.key === normCat) || categoriesConfig[0];
                 const IconComp = catConf.icon;
+                const bizId = String(biz._id || biz.id || '');
+                const outletItemCount = (items || []).filter((it: any) => {
+                  if (!it) return false;
+                  const itCat = normalizeCategory(it.category || it.type);
+                  if (bizId && (it.businessId === bizId || it.vendorId === bizId)) return true;
+                  if (itCat === normCat && (!it.businessId || it.vendorId === currentUser?._id)) return true;
+                  return false;
+                }).length;
+
                 return (
                   <TouchableOpacity
                     key={biz._id || biz.id}
@@ -1796,12 +1895,17 @@ export default function BusinessScreen({
                         elevation: 2,
                       },
                     ]}>
-                    {/* Top Row: Category Pill Badge + Approval Status Badge (Left) & Category Icon Box (Right) */}
+                    {/* Top Row: Category Pill Badge + Item Count Badge + Approval Status Badge (Left) & Category Icon Box (Right) */}
                     <View style={tw`flex-row justify-between items-center mb-1`}>
-                      <View style={tw`flex-row items-center`}>
-                        <View style={[tw`px-3 py-1 rounded-full mr-2`, { backgroundColor: isDark ? '#422006' : '#FEF9C3' }]}>
+                      <View style={tw`flex-row items-center flex-wrap gap-1.5`}>
+                        <View style={[tw`px-3 py-1 rounded-full`, { backgroundColor: isDark ? '#422006' : '#FEF9C3' }]}>
                           <Text style={[tw`text-[10px] font-extrabold uppercase tracking-wider`, { color: isDark ? '#FDE047' : '#854D0E' }]}>
                             {catConf.label}
+                          </Text>
+                        </View>
+                        <View style={[tw`px-2.5 py-0.5 rounded-full`, isDark ? tw`bg-indigo-950/70 border border-indigo-800` : tw`bg-indigo-50 border border-indigo-200`]}>
+                          <Text style={[tw`text-[10px] font-black tracking-wide`, isDark ? tw`text-indigo-400` : tw`text-indigo-600`]}>
+                            {outletItemCount} {catConf.unit || 'Item'}{outletItemCount !== 1 ? 's' : ''}
                           </Text>
                         </View>
                         {(biz.isApproved === false || biz.status === 'Pending Pincode Admin Review' || biz.approvalStatus === 'Pending') && (
@@ -1895,7 +1999,7 @@ export default function BusinessScreen({
           )}
         </ScrollView>
       ) : (() => {
-        const selectedBiz = businesses.find((b: any) => normalizeCategory(b.vendorType || b.category || b.baseVendorType) === selectedCategory) || businesses.find((b: any) => ((b._id || b.id) && (b._id || b.id) === activeBizId)) || businesses[0];
+        const selectedBiz = (activeBizId ? businesses.find((b: any) => (b._id || b.id) === activeBizId) : null) || businesses.find((b: any) => normalizeCategory(b.vendorType || b.category || b.baseVendorType) === selectedCategory) || businesses[0];
         return (
         /* Category Items View */
         <>

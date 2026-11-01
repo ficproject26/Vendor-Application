@@ -15,6 +15,7 @@ import {
   TouchableWithoutFeedback,
   ActivityIndicator,
   RefreshControl,
+  BackHandler,
 } from 'react-native';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import tw from 'twrnc';
@@ -103,12 +104,13 @@ export const resolveBookingCategoryInfo = (o: any): BookingCategoryInfo => {
     ['hotels', 'resorts', 'rooms', 'luxury', 'hill station', 'cottages', 'villas', 'resort', 'hotel', 'homestay', 'pg', 'stay'].includes(itemCat);
 
   // Explicit Travel check
-  const isBus = Boolean(raw.isBusBooking || raw.bus_name || raw.busId);
+  const isBus = Boolean(raw.isBusBooking || raw.bus_name || raw.busId || raw.busName);
   const isTravelTaxonomy =
     ['travel', 'travels', 'package', 'packages', 'transport'].includes(rawCat) ||
     ['travel', 'travels', 'package', 'packages', 'transport', 'bus', 'vehicle', 'cab', 'car', 'bike'].includes(rawType) ||
     ['travel', 'travels'].includes(itemMainCat) ||
     ['car', 'bus', 'bike', 'mini superbikes', 'ac car', 'non ac car', 'ac bus', 'non ac bus', 'superbikes', 'travel', 'travels', 'package'].includes(itemCat) ||
+    Boolean(raw.vehicleNumber || raw.vehicleType || raw.boardingPoint || raw.droppingPoint || raw.travelDate || raw.departureTime) ||
     isBus;
 
   // Explicit Services check
@@ -116,11 +118,11 @@ export const resolveBookingCategoryInfo = (o: any): BookingCategoryInfo => {
     ['services', 'service', 'home services'].includes(rawCat) ||
     ['services', 'service', 'home services', 'appointment', 'hospital', 'technician', 'clinic'].includes(rawType) ||
     ['services', 'service'].includes(itemMainCat) ||
-    ['it & device support', 'ac service', 'laptop repairs', 'cctv installation', 'pc repairs', 'full clean', 'cleaning', 'electrician', 'plumber', 'hospital', 'technician', 'healthcare'].includes(itemCat);
+    ['it & device support', 'ac service', 'laptop repairs', 'cctv installation', 'pc repairs', 'full clean', 'cleaning', 'electrician', 'plumber', 'hospital', 'technician', 'healthcare', 'lineman', 'electrical & solar services', 'electrical & solar'].includes(itemCat);
 
-  // Service keywords check on product details / service name
-  const isServiceKeyword = /\b(electrician|plumber|technician|solar|repair|repairs|cctv|cleaning|service|services|consultation|doctor|nurse|clinic|hospital)\b/i.test(detailStr) ||
-                           /\b(electrician|plumber|technician|solar|repair|repairs|cctv|cleaning|service|services|consultation|doctor|nurse|clinic|hospital)\b/i.test(rawServiceName);
+  // Service keywords check on product details / service name (including lineman)
+  const isServiceKeyword = /\b(electrician|plumber|technician|solar|repair|repairs|cctv|cleaning|service|services|consultation|doctor|nurse|clinic|hospital|lineman|mechanic|carpenter|painter|handyman)\b/i.test(detailStr) ||
+                           /\b(electrician|plumber|technician|solar|repair|repairs|cctv|cleaning|service|services|consultation|doctor|nurse|clinic|hospital|lineman|mechanic|carpenter|painter|handyman)\b/i.test(rawServiceName);
 
   // Travel keywords check on product details / service name
   const isTravelKeyword = isBus || /\b(bus|flight|train|vehicle|travel|travels|tour|cab|taxi|superbike)\b/i.test(detailStr) ||
@@ -129,7 +131,8 @@ export const resolveBookingCategoryInfo = (o: any): BookingCategoryInfo => {
   // Stay keywords check on product details / property name
   const rawPropName = String(raw.propertyName || raw.hotelName || '').toLowerCase();
   const isStayKeyword = /\b(hotel|hotels|resort|resorts|villa|homestay|cottage|lodge|room|rooms|pg)\b/i.test(detailStr) ||
-                        /\b(hotel|hotels|resort|resorts|villa|homestay|cottage|lodge|room|rooms|pg)\b/i.test(rawPropName);
+                        /\b(hotel|hotels|resort|resorts|villa|homestay|cottage|lodge|room|rooms|pg)\b/i.test(rawPropName) ||
+                        Boolean(raw.hotelName || raw.roomNumber || raw.roomName || raw.staySchedule);
 
   // Resolve with priority:
   // 1. If explicitly a Service, or has service keywords and is not a genuine stay hotel/resort
@@ -146,21 +149,7 @@ export const resolveBookingCategoryInfo = (o: any): BookingCategoryInfo => {
     };
   }
 
-  // 2. If explicitly Stay
-  if (isStayTaxonomy || (isStayKeyword && !isServiceKeyword && !isTravelKeyword)) {
-    return {
-      category: 'Stay',
-      badgeLabel: 'STAY BOOKING',
-      textColor: '#B45309',
-      bgColor: '#FFFBEB',
-      darkBgColor: 'rgba(69, 26, 3, 0.6)',
-      darkTextColor: '#FBBF24',
-      borderColor: '#FEF3C7',
-      iconName: 'CalendarCheck',
-    };
-  }
-
-  // 3. If explicitly Travel
+  // 2. If explicitly Travel (Evaluated before Stay to prevent bus/travel records from being captured by legacy type:'Stay')
   if (isTravelTaxonomy || (isTravelKeyword && !isStayKeyword)) {
     return {
       category: 'Travel',
@@ -171,6 +160,20 @@ export const resolveBookingCategoryInfo = (o: any): BookingCategoryInfo => {
       darkTextColor: '#60A5FA',
       borderColor: '#DBEAFE',
       iconName: 'Compass',
+    };
+  }
+
+  // 3. If explicitly Stay
+  if ((isStayTaxonomy && !isTravelTaxonomy && !isTravelKeyword) || (isStayKeyword && !isServiceKeyword && !isTravelKeyword)) {
+    return {
+      category: 'Stay',
+      badgeLabel: 'STAY BOOKING',
+      textColor: '#B45309',
+      bgColor: '#FFFBEB',
+      darkBgColor: 'rgba(69, 26, 3, 0.6)',
+      darkTextColor: '#FBBF24',
+      borderColor: '#FEF3C7',
+      iconName: 'CalendarCheck',
     };
   }
 
@@ -417,6 +420,14 @@ export default function OrdersScreen({
 }: OrdersScreenProps) {
   const insets = useSafeAreaInsets();
   const [activeSegment, setActiveSegment] = useState<'Orders' | 'Bookings' | 'Jobs'>('Orders');
+  const [visitedSegments, setVisitedSegments] = useState<Set<'Orders' | 'Bookings' | 'Jobs'>>(new Set(['Orders']));
+  const [isAllocatingSeat, setIsAllocatingSeat] = useState(false);
+
+  const handleSelectSegment = (seg: 'Orders' | 'Bookings' | 'Jobs') => {
+    setActiveSegment(seg);
+    setVisitedSegments(prev => new Set(prev).add(seg));
+    setActiveFilter('All');
+  };
   const [activeFilter, setActiveFilter] = useState<any>('All');
   const [bookingCategoryFilter, setBookingCategoryFilter] = useState<'All' | 'Services' | 'Stay' | 'Travel'>('All');
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
@@ -588,8 +599,7 @@ export default function OrdersScreen({
   // Handle external navigation directly into a segment/target item from real-time notifications
   useEffect(() => {
     if (routeParams?.segment) {
-      setActiveSegment(routeParams.segment);
-      setActiveFilter('All');
+      handleSelectSegment(routeParams.segment);
       // Only clear if no targetId is pending; if targetId is present, the target matcher effect will clear it upon finding and opening the item
       if (!routeParams.targetId && clearRouteParams) {
         clearRouteParams();
@@ -686,6 +696,7 @@ export default function OrdersScreen({
   }, []);
 
   const handleStatusTransition = async (orderId: string, newStatus: string) => {
+    if (actionLoading) return;
     setActionLoading(true);
     try {
       await updateOrderStatus(orderId, newStatus);
@@ -757,6 +768,32 @@ export default function OrdersScreen({
   const [assignedSeats, setAssignedSeats] = useState<{ [key: number]: string }>({});
   const [customSeatInput, setCustomSeatInput] = useState('');
   const [activePassengerIdx, setActivePassengerIdx] = useState(0);
+
+  // Local BackHandler to close modals and overlays before popping screen
+  useEffect(() => {
+    const onBackPress = () => {
+      if (seatModalVisible) {
+        setSeatModalVisible(false);
+        return true;
+      }
+      if (filterModalVisible) {
+        setFilterModalVisible(false);
+        return true;
+      }
+      if (selectedOrder) {
+        setSelectedOrder(null);
+        return true;
+      }
+      if (selectedBooking) {
+        setSelectedBooking(null);
+        return true;
+      }
+      return false; // Let parent App.tsx handle history popping
+    };
+
+    const backSub = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+    return () => backSub.remove();
+  }, [seatModalVisible, filterModalVisible, selectedOrder, selectedBooking]);
 
   // Compute all occupied seats for this bus/service across all orders
   const occupiedSeatsMap = useMemo(() => {
@@ -871,8 +908,10 @@ export default function OrdersScreen({
   };
 
   const handleConfirmSeatAllocation = async () => {
-    if (!targetBusOrder) return;
-    const raw = targetBusOrder.rawOrder || targetBusOrder;
+    if (isAllocatingSeat || !targetBusOrder) return;
+    setIsAllocatingSeat(true);
+    try {
+      const raw = targetBusOrder.rawOrder || targetBusOrder;
     const orderId = String(targetBusOrder.dbId || targetBusOrder.id || raw.id || raw._id || '');
     const travelers = Array.isArray(raw.travelers) && raw.travelers.length > 0
       ? [...raw.travelers]
@@ -960,8 +999,7 @@ export default function OrdersScreen({
 
     setSeatModalVisible(false);
     setActionLoading(true);
-    try {
-      await updateOrderStatus(orderId, 'Confirmed', {
+    await updateOrderStatus(orderId, 'Confirmed', {
         seat: seatSummary,
         allocated_seat: seatSummary,
         travelers: updatedTravelers,
@@ -977,6 +1015,7 @@ export default function OrdersScreen({
       Alert.alert('Error', err.message || 'Failed to allocate seat.');
     } finally {
       setActionLoading(false);
+      setIsAllocatingSeat(false);
     }
   };
 
@@ -1599,10 +1638,8 @@ export default function OrdersScreen({
         {/* Toggle Segment Bar: My Orders | My Bookings | My Jobs */}
         <View style={[tw`flex-row p-1 rounded-xl mb-4`, isDark ? tw`bg-zinc-950` : tw`bg-gray-100`]}>
           <TouchableOpacity
-            onPress={() => {
-              setActiveSegment('Orders');
-              setActiveFilter('All');
-            }}
+            activeOpacity={0.7}
+            onPress={() => handleSelectSegment('Orders')}
             style={[
               tw`flex-1 py-2 rounded-lg items-center`,
               activeSegment === 'Orders' ? [tw`shadow-sm`, isDark ? tw`bg-zinc-900` : tw`bg-white`] : {},
@@ -1619,10 +1656,8 @@ export default function OrdersScreen({
           </TouchableOpacity>
 
           <TouchableOpacity
-            onPress={() => {
-              setActiveSegment('Bookings');
-              setActiveFilter('All');
-            }}
+            activeOpacity={0.7}
+            onPress={() => handleSelectSegment('Bookings')}
             style={[
               tw`flex-1 py-2 rounded-lg items-center`,
               activeSegment === 'Bookings' ? [tw`shadow-sm`, isDark ? tw`bg-zinc-900` : tw`bg-white`] : {},
@@ -1639,10 +1674,8 @@ export default function OrdersScreen({
           </TouchableOpacity>
 
           <TouchableOpacity
-            onPress={() => {
-              setActiveSegment('Jobs');
-              setActiveFilter('All');
-            }}
+            activeOpacity={0.7}
+            onPress={() => handleSelectSegment('Jobs')}
             style={[
               tw`flex-1 py-2 rounded-lg items-center`,
               activeSegment === 'Jobs' ? [tw`shadow-sm`, isDark ? tw`bg-zinc-900` : tw`bg-white`] : {},
@@ -1737,21 +1770,26 @@ export default function OrdersScreen({
               Loading {activeSegment === 'Orders' ? 'Orders' : activeSegment === 'Bookings' ? 'Bookings' : 'Jobs'}...
             </Text>
           </View>
-        ) : activeSegment === 'Orders' ? (
-          filteredOrders.length === 0 ? (
-            <View style={tw`py-16 items-center justify-center`}>
-              <Package size={48} color={isDark ? '#52525B' : '#D1D5DB'} />
-              <Text style={[tw`mt-4 text-base font-bold`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
-                No Orders Found
-              </Text>
-            </View>
-          ) : (
-            filteredOrders.map(order => {
+        ) : null}
+
+        {/* Orders Container */}
+        {visitedSegments.has('Orders') && (
+          <View style={activeSegment === 'Orders' ? tw`flex` : tw`hidden`}>
+            {filteredOrders.length === 0 && !loadingOrders ? (
+              <View style={tw`py-16 items-center justify-center`}>
+                <Package size={48} color={isDark ? '#52525B' : '#D1D5DB'} />
+                <Text style={[tw`mt-4 text-base font-bold`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
+                  No Orders Found
+                </Text>
+              </View>
+            ) : (
+              filteredOrders.map(order => {
               const config = statusConfig[order.status] || {
                 color: '#4B5563',
                 bgColor: '#F3F4F6',
               };
-              const isPaid = (order.paymentStatus === 'Paid' || ['Delivered', 'Completed'].includes(order.status));
+              const isPaid = String(order.paymentStatus || '').toLowerCase() === 'paid' || String(order.paymentStatus || '').toLowerCase() === 'completed';
+              const isFailed = String(order.paymentStatus || '').toLowerCase() === 'failed';
               const pMethod = (order.paymentMethod || order.rawOrder?.paymentMethod || order.rawOrder?.payment_method || '').toLowerCase();
               const isCod = pMethod.includes('cod') || pMethod.includes('cash');
 
@@ -1771,58 +1809,73 @@ export default function OrdersScreen({
                       elevation: 2,
                     },
                   ]}>
-                  {/* Header Row: Category Badge + Order ID + Status Badges */}
-                  <View style={tw`flex-row items-center justify-between mb-3`}>
-                    <View style={tw`flex-row items-center`}>
+                  {/* Tier 1 Header: Category Badge + Order ID (Left), Order Delivery Status Badge (Right) */}
+                  <View style={tw`flex-row items-center justify-between mb-2`}>
+                    <View style={tw`flex-row items-center flex-1 mr-2`}>
                       <View style={[tw`flex-row items-center px-2.5 py-1 rounded-full mr-2`, isDark ? tw`bg-indigo-950/60` : tw`bg-indigo-50`]}>
-                        <Package size={13} color="#4F46E5" style={tw`mr-1.5`} />
-                        <Text style={tw`text-[11px] font-black text-indigo-700 dark:text-indigo-400 tracking-wider`}>
+                        <Package size={12} color="#4F46E5" style={tw`mr-1`} />
+                        <Text style={tw`text-[10px] font-black text-indigo-700 dark:text-indigo-400 tracking-wider`}>
                           {order.category ? `${String(order.category).toUpperCase()} ORDER` : 'ORDER'}
                         </Text>
                       </View>
-                      <Text style={[tw`font-extrabold text-base`, isDark ? tw`text-white` : tw`text-gray-900`]}>
+                      <Text style={[tw`font-extrabold text-sm font-mono`, isDark ? tw`text-white` : tw`text-gray-900`]} numberOfLines={1}>
                         #{order.id}
                       </Text>
                     </View>
-                    <View style={tw`flex-row items-center gap-x-1.5`}>
-                      {/* Payment Status Badge */}
+                    <View
+                      style={[
+                        tw`px-2.5 py-1 rounded-full`,
+                        {backgroundColor: config.bgColor},
+                      ]}>
+                      <Text
+                        style={[
+                          tw`text-[11px] font-bold`,
+                          {color: config.color},
+                        ]}>
+                        {order.status}
+                      </Text>
+                    </View>
+                  </View>
+
+                  {/* Tier 2 Header: Dedicated Payment Status Badge + Payment Method + Date/Time */}
+                  <View style={[tw`flex-row items-center justify-between pb-2 mb-2.5 border-b`, isDark ? tw`border-zinc-800` : tw`border-gray-100`]}>
+                    <View style={tw`flex-row items-center gap-1.5`}>
                       <View
                         style={[
-                          tw`px-2.5 py-1 rounded-full border`,
+                          tw`px-2 py-0.5 rounded-md border`,
                           isPaid
                             ? (isDark ? tw`bg-emerald-950/60 border-emerald-800` : tw`bg-emerald-50 border-emerald-200`)
                             : isCod
                             ? (isDark ? tw`bg-amber-950/60 border-amber-800` : tw`bg-amber-50 border-amber-200`)
-                            : (isDark ? tw`bg-red-950/60 border-red-800` : tw`bg-red-50 border-red-200`),
+                            : isFailed
+                            ? (isDark ? tw`bg-rose-950/60 border-rose-800` : tw`bg-rose-50 border-rose-200`)
+                            : (isDark ? tw`bg-amber-950/60 border-amber-800` : tw`bg-amber-50 border-amber-200`),
                         ]}>
                         <Text
                           style={[
-                            tw`text-[11px] font-bold`,
+                            tw`text-[10px] font-black uppercase tracking-wider`,
                             isPaid
                               ? tw`text-emerald-600`
                               : isCod
                               ? tw`text-amber-600`
-                              : tw`text-red-600`,
+                              : isFailed
+                              ? tw`text-rose-600`
+                              : tw`text-amber-600`,
                           ]}>
-                          {isPaid ? '✓ Paid' : isCod ? 'COD Pending' : (order.paymentStatus || 'Pending')}
+                          {isPaid ? '✓ Paid' : isCod ? 'COD Pending' : isFailed ? '✕ Payment Failed' : (order.paymentStatus || 'Payment Pending')}
                         </Text>
                       </View>
-
-                      {/* Order Status Badge */}
-                      <View
-                        style={[
-                          tw`px-2.5 py-1 rounded-full`,
-                          {backgroundColor: config.bgColor},
-                        ]}>
-                        <Text
-                          style={[
-                            tw`text-[11px] font-bold`,
-                            {color: config.color},
-                          ]}>
-                          {order.status}
-                        </Text>
-                      </View>
+                      {pMethod ? (
+                        <View style={[tw`px-1.5 py-0.5 rounded`, isDark ? tw`bg-zinc-800` : tw`bg-gray-100`]}>
+                          <Text style={[tw`text-[9px] font-bold uppercase`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>
+                            {pMethod.toUpperCase()}
+                          </Text>
+                        </View>
+                      ) : null}
                     </View>
+                    <Text style={[tw`text-[11px] font-medium`, isDark ? tw`text-zinc-400` : tw`text-gray-400`]}>
+                      {order.dateTime || ''}
+                    </Text>
                   </View>
 
                   {/* Body: Product Image + Product Details + Quantity */}
@@ -1893,18 +1946,22 @@ export default function OrdersScreen({
                   </View>
                 </TouchableOpacity>
               );
-            })
-          )
-        ) : activeSegment === 'Bookings' ? (
-          filteredBookings.length === 0 ? (
-            <View style={tw`py-16 items-center justify-center`}>
-              <CalendarCheck size={48} color={isDark ? '#52525B' : '#D1D5DB'} />
-              <Text style={[tw`mt-4 text-base font-bold`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
-                No Bookings Found
-              </Text>
-            </View>
-          ) : (
-            filteredBookings.map(booking => {
+            }))}
+          </View>
+        )}
+
+        {/* Bookings Container */}
+        {visitedSegments.has('Bookings') && (
+          <View style={activeSegment === 'Bookings' ? tw`flex` : tw`hidden`}>
+            {filteredBookings.length === 0 && !loadingBookings ? (
+              <View style={tw`py-16 items-center justify-center`}>
+                <CalendarCheck size={48} color={isDark ? '#52525B' : '#D1D5DB'} />
+                <Text style={[tw`mt-4 text-base font-bold`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
+                  No Bookings Found
+                </Text>
+              </View>
+            ) : (
+              filteredBookings.map(booking => {
               if (booking.isBusBooking) {
                 return renderBusBookingCard(booking);
               }
@@ -1913,7 +1970,10 @@ export default function OrdersScreen({
                 bgColor: '#F3F4F6',
                 icon: Clock,
               };
-              const isPaid = (booking.paymentStatus === 'Paid' || booking.paymentStatus === 'Completed' || ['Completed', 'Delivered', 'Checked Out'].includes(booking.status));
+              const isPaid = String(booking.paymentStatus || '').toLowerCase() === 'paid' || String(booking.paymentStatus || '').toLowerCase() === 'completed';
+              const isFailed = String(booking.paymentStatus || '').toLowerCase() === 'failed';
+              const pMethod = (booking.paymentMethod || booking.rawOrder?.paymentMethod || booking.rawOrder?.payment_method || '').toLowerCase();
+              const isCod = pMethod.includes('cod') || pMethod.includes('cash') || pMethod.includes('hotel') || pMethod.includes('pay at hotel');
 
               if (booking.bookingCategory === 'Stay') {
                 return (
@@ -1932,31 +1992,53 @@ export default function OrdersScreen({
                         elevation: 2,
                       },
                     ]}>
-                    {/* Header Row: Stay Tag + Booking ID + Status Badges */}
-                    <View style={tw`flex-row items-center justify-between mb-2.5`}>
-                      <View style={[tw`flex-row items-center px-2.5 py-1 rounded-full`, isDark ? tw`bg-amber-950/60` : tw`bg-amber-50`]}>
-                        <CalendarCheck size={13} color="#D97706" style={tw`mr-1.5`} />
-                        <Text style={tw`text-[11px] font-black text-amber-700 dark:text-amber-400 tracking-wider`}>{booking.bookingBadgeLabel || 'STAY BOOKING'}</Text>
+                    {/* Tier 1 Header: Stay Tag + Booking ID (Left), Status Badge (Right) */}
+                    <View style={tw`flex-row items-center justify-between mb-2`}>
+                      <View style={tw`flex-row items-center flex-1 mr-2`}>
+                        <View style={[tw`flex-row items-center px-2.5 py-1 rounded-full mr-2`, isDark ? tw`bg-amber-950/60` : tw`bg-amber-50`]}>
+                          <CalendarCheck size={12} color="#D97706" style={tw`mr-1`} />
+                          <Text style={tw`text-[10px] font-black text-amber-700 dark:text-amber-400 tracking-wider`}>{booking.bookingBadgeLabel || 'STAY BOOKING'}</Text>
+                        </View>
+                        <Text style={[tw`font-extrabold text-sm font-mono`, isDark ? tw`text-white` : tw`text-gray-900`]} numberOfLines={1}>
+                          #{booking.id}
+                        </Text>
                       </View>
+                      <View style={[tw`px-2.5 py-1 rounded-full`, {backgroundColor: config.bgColor}]}>
+                        <Text style={[tw`text-[11px] font-bold`, {color: config.color}]}>
+                          {booking.status}
+                        </Text>
+                      </View>
+                    </View>
 
-                      <View style={tw`flex-row items-center gap-x-1.5`}>
+                    {/* Tier 2 Header: Dedicated Payment Status Badge + Payment Method + Date/Time */}
+                    <View style={[tw`flex-row items-center justify-between pb-2 mb-2.5 border-b`, isDark ? tw`border-zinc-800` : tw`border-gray-100`]}>
+                      <View style={tw`flex-row items-center gap-1.5`}>
                         <View
                           style={[
-                            tw`px-2.5 py-1 rounded-full border`,
+                            tw`px-2 py-0.5 rounded-md border`,
                             isPaid
                               ? (isDark ? tw`bg-emerald-950/60 border-emerald-800` : tw`bg-emerald-50 border-emerald-200`)
+                              : isCod
+                              ? (isDark ? tw`bg-amber-950/60 border-amber-800` : tw`bg-amber-50 border-amber-200`)
+                              : isFailed
+                              ? (isDark ? tw`bg-rose-950/60 border-rose-800` : tw`bg-rose-50 border-rose-200`)
                               : (isDark ? tw`bg-amber-950/60 border-amber-800` : tw`bg-amber-50 border-amber-200`),
                           ]}>
-                          <Text style={[tw`text-[11px] font-bold`, isPaid ? tw`text-emerald-600` : tw`text-amber-600`]}>
-                            {isPaid ? '✓ Paid' : (booking.paymentStatus || 'Pending')}
+                          <Text style={[tw`text-[10px] font-black uppercase tracking-wider`, isPaid ? tw`text-emerald-600` : isCod ? tw`text-amber-600` : isFailed ? tw`text-rose-600` : tw`text-amber-600`]}>
+                            {isPaid ? '✓ Paid' : isCod ? 'Pay at Hotel' : isFailed ? '✕ Payment Failed' : (booking.paymentStatus || 'Payment Pending')}
                           </Text>
                         </View>
-                        <View style={[tw`px-2.5 py-1 rounded-full`, {backgroundColor: config.bgColor}]}>
-                          <Text style={[tw`text-[11px] font-bold`, {color: config.color}]}>
-                            {booking.status}
-                          </Text>
-                        </View>
+                        {pMethod ? (
+                          <View style={[tw`px-1.5 py-0.5 rounded`, isDark ? tw`bg-zinc-800` : tw`bg-gray-100`]}>
+                            <Text style={[tw`text-[9px] font-bold uppercase`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>
+                              {pMethod.toUpperCase()}
+                            </Text>
+                          </View>
+                        ) : null}
                       </View>
+                      <Text style={[tw`text-[11px] font-medium`, isDark ? tw`text-zinc-400` : tw`text-gray-400`]}>
+                        Check-in: {booking.checkInDate || ''}
+                      </Text>
                     </View>
 
                     {/* Property Name & Accommodation */}
@@ -2039,31 +2121,53 @@ export default function OrdersScreen({
                         elevation: 2,
                       },
                     ]}>
-                    {/* Header Row: Travel Tag + Booking ID + Status Badges */}
-                    <View style={tw`flex-row items-center justify-between mb-2.5`}>
-                      <View style={[tw`flex-row items-center px-2.5 py-1 rounded-full`, isDark ? tw`bg-blue-950/60` : tw`bg-blue-50`]}>
-                        <Compass size={13} color="#2563EB" style={tw`mr-1.5`} />
-                        <Text style={tw`text-[11px] font-black text-blue-700 dark:text-blue-400 tracking-wider`}>{booking.bookingBadgeLabel || 'TRAVEL BOOKING'}</Text>
+                    {/* Tier 1 Header: Travel Tag + Booking ID (Left), Status Badge (Right) */}
+                    <View style={tw`flex-row items-center justify-between mb-2`}>
+                      <View style={tw`flex-row items-center flex-1 mr-2`}>
+                        <View style={[tw`flex-row items-center px-2.5 py-1 rounded-full mr-2`, isDark ? tw`bg-blue-950/60` : tw`bg-blue-50`]}>
+                          <Compass size={12} color="#2563EB" style={tw`mr-1`} />
+                          <Text style={tw`text-[10px] font-black text-blue-700 dark:text-blue-400 tracking-wider`}>{booking.bookingBadgeLabel || 'TRAVEL BOOKING'}</Text>
+                        </View>
+                        <Text style={[tw`font-extrabold text-sm font-mono`, isDark ? tw`text-white` : tw`text-gray-900`]} numberOfLines={1}>
+                          #{booking.id}
+                        </Text>
                       </View>
+                      <View style={[tw`px-2.5 py-1 rounded-full`, {backgroundColor: config.bgColor}]}>
+                        <Text style={[tw`text-[11px] font-bold`, {color: config.color}]}>
+                          {booking.status}
+                        </Text>
+                      </View>
+                    </View>
 
-                      <View style={tw`flex-row items-center gap-x-1.5`}>
+                    {/* Tier 2 Header: Dedicated Payment Status Badge + Payment Method + Date/Time */}
+                    <View style={[tw`flex-row items-center justify-between pb-2 mb-2.5 border-b`, isDark ? tw`border-zinc-800` : tw`border-gray-100`]}>
+                      <View style={tw`flex-row items-center gap-1.5`}>
                         <View
                           style={[
-                            tw`px-2.5 py-1 rounded-full border`,
+                            tw`px-2 py-0.5 rounded-md border`,
                             isPaid
                               ? (isDark ? tw`bg-emerald-950/60 border-emerald-800` : tw`bg-emerald-50 border-emerald-200`)
+                              : isCod
+                              ? (isDark ? tw`bg-amber-950/60 border-amber-800` : tw`bg-amber-50 border-amber-200`)
+                              : isFailed
+                              ? (isDark ? tw`bg-rose-950/60 border-rose-800` : tw`bg-rose-50 border-rose-200`)
                               : (isDark ? tw`bg-amber-950/60 border-amber-800` : tw`bg-amber-50 border-amber-200`),
                           ]}>
-                          <Text style={[tw`text-[11px] font-bold`, isPaid ? tw`text-emerald-600` : tw`text-amber-600`]}>
-                            {isPaid ? '✓ Paid' : (booking.paymentStatus || 'Pending')}
+                          <Text style={[tw`text-[10px] font-black uppercase tracking-wider`, isPaid ? tw`text-emerald-600` : isCod ? tw`text-amber-600` : isFailed ? tw`text-rose-600` : tw`text-amber-600`]}>
+                            {isPaid ? '✓ Paid' : isCod ? 'COD Pending' : isFailed ? '✕ Payment Failed' : (booking.paymentStatus || 'Payment Pending')}
                           </Text>
                         </View>
-                        <View style={[tw`px-2.5 py-1 rounded-full`, {backgroundColor: config.bgColor}]}>
-                          <Text style={[tw`text-[11px] font-bold`, {color: config.color}]}>
-                            {booking.status}
-                          </Text>
-                        </View>
+                        {pMethod ? (
+                          <View style={[tw`px-1.5 py-0.5 rounded`, isDark ? tw`bg-zinc-800` : tw`bg-gray-100`]}>
+                            <Text style={[tw`text-[9px] font-bold uppercase`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>
+                              {pMethod.toUpperCase()}
+                            </Text>
+                          </View>
+                        ) : null}
                       </View>
+                      <Text style={[tw`text-[11px] font-medium`, isDark ? tw`text-zinc-400` : tw`text-gray-400`]}>
+                        {booking.travelDate || ''}
+                      </Text>
                     </View>
 
                     {/* Travel Option Name & Booking ID */}
@@ -2142,43 +2246,65 @@ export default function OrdersScreen({
                       elevation: 2,
                     },
                   ]}>
-                  {/* Header Row: Service Tag + Booking ID + Status Badges */}
-                  <View style={tw`flex-row items-center justify-between mb-2.5`}>
-                    <View style={[
-                      tw`flex-row items-center px-2.5 py-1 rounded-full`,
-                      booking.bookingCategory === 'Unknown'
-                        ? (isDark ? tw`bg-zinc-800` : tw`bg-gray-100`)
-                        : (isDark ? tw`bg-teal-950/60` : tw`bg-teal-50`)
-                    ]}>
-                      <CalendarCheck size={13} color={booking.bookingCategory === 'Unknown' ? (isDark ? '#A1A1AA' : '#6B7280') : '#0D9488'} style={tw`mr-1.5`} />
-                      <Text style={[
-                        tw`text-[11px] font-black tracking-wider`,
+                  {/* Tier 1 Header: Service Tag + Booking ID (Left), Status Badge (Right) */}
+                  <View style={tw`flex-row items-center justify-between mb-2`}>
+                    <View style={tw`flex-row items-center flex-1 mr-2`}>
+                      <View style={[
+                        tw`flex-row items-center px-2.5 py-1 rounded-full mr-2`,
                         booking.bookingCategory === 'Unknown'
-                          ? (isDark ? tw`text-zinc-400` : tw`text-gray-600`)
-                          : tw`text-teal-700 dark:text-teal-400`
+                          ? (isDark ? tw`bg-zinc-800` : tw`bg-gray-100`)
+                          : (isDark ? tw`bg-teal-950/60` : tw`bg-teal-50`)
                       ]}>
-                        {booking.bookingBadgeLabel || 'SERVICE BOOKING'}
+                        <CalendarCheck size={12} color={booking.bookingCategory === 'Unknown' ? (isDark ? '#A1A1AA' : '#6B7280') : '#0D9488'} style={tw`mr-1`} />
+                        <Text style={[
+                          tw`text-[10px] font-black tracking-wider`,
+                          booking.bookingCategory === 'Unknown'
+                            ? (isDark ? tw`text-zinc-400` : tw`text-gray-600`)
+                            : tw`text-teal-700 dark:text-teal-400`
+                        ]}>
+                          {booking.bookingBadgeLabel || 'SERVICE BOOKING'}
+                        </Text>
+                      </View>
+                      <Text style={[tw`font-extrabold text-sm font-mono`, isDark ? tw`text-white` : tw`text-gray-900`]} numberOfLines={1}>
+                        #{booking.id}
                       </Text>
                     </View>
+                    <View style={[tw`px-2.5 py-1 rounded-full`, {backgroundColor: config.bgColor}]}>
+                      <Text style={[tw`text-[11px] font-bold`, {color: config.color}]}>
+                        {booking.status}
+                      </Text>
+                    </View>
+                  </View>
 
-                    <View style={tw`flex-row items-center gap-x-1.5`}>
+                  {/* Tier 2 Header: Dedicated Payment Status Badge + Payment Method + Date/Time */}
+                  <View style={[tw`flex-row items-center justify-between pb-2 mb-2.5 border-b`, isDark ? tw`border-zinc-800` : tw`border-gray-100`]}>
+                    <View style={tw`flex-row items-center gap-1.5`}>
                       <View
                         style={[
-                          tw`px-2.5 py-1 rounded-full border`,
+                          tw`px-2 py-0.5 rounded-md border`,
                           isPaid
                             ? (isDark ? tw`bg-emerald-950/60 border-emerald-800` : tw`bg-emerald-50 border-emerald-200`)
+                            : isCod
+                            ? (isDark ? tw`bg-amber-950/60 border-amber-800` : tw`bg-amber-50 border-amber-200`)
+                            : isFailed
+                            ? (isDark ? tw`bg-rose-950/60 border-rose-800` : tw`bg-rose-50 border-rose-200`)
                             : (isDark ? tw`bg-amber-950/60 border-amber-800` : tw`bg-amber-50 border-amber-200`),
                         ]}>
-                        <Text style={[tw`text-[11px] font-bold`, isPaid ? tw`text-emerald-600` : tw`text-amber-600`]}>
-                          {isPaid ? '✓ Paid' : (booking.paymentStatus || 'Pending')}
+                        <Text style={[tw`text-[10px] font-black uppercase tracking-wider`, isPaid ? tw`text-emerald-600` : isCod ? tw`text-amber-600` : isFailed ? tw`text-rose-600` : tw`text-amber-600`]}>
+                          {isPaid ? '✓ Paid' : isCod ? 'COD Pending' : isFailed ? '✕ Payment Failed' : (booking.paymentStatus || 'Payment Pending')}
                         </Text>
                       </View>
-                      <View style={[tw`px-2.5 py-1 rounded-full`, {backgroundColor: config.bgColor}]}>
-                        <Text style={[tw`text-[11px] font-bold`, {color: config.color}]}>
-                          {booking.status}
-                        </Text>
-                      </View>
+                      {pMethod ? (
+                        <View style={[tw`px-1.5 py-0.5 rounded`, isDark ? tw`bg-zinc-800` : tw`bg-gray-100`]}>
+                          <Text style={[tw`text-[9px] font-bold uppercase`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>
+                            {pMethod.toUpperCase()}
+                          </Text>
+                        </View>
+                      ) : null}
                     </View>
+                    <Text style={[tw`text-[11px] font-medium`, isDark ? tw`text-zinc-400` : tw`text-gray-400`]}>
+                      {booking.serviceDate || booking.serviceTime || ''}
+                    </Text>
                   </View>
 
                   {/* Service Name & Booking ID */}
@@ -2251,19 +2377,22 @@ export default function OrdersScreen({
                   </View>
                 </TouchableOpacity>
               );
-            })
-          )
-        ) : (
-          /* Jobs Tab Content */
-          filteredJobs.length === 0 ? (
-            <View style={tw`py-16 items-center justify-center`}>
-              <Briefcase size={48} color={isDark ? '#52525B' : '#D1D5DB'} />
-              <Text style={[tw`mt-4 text-base font-bold`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
-                No Job Applications Found
-              </Text>
-            </View>
-          ) : (
-            filteredJobs.map(order => {
+            }))}
+          </View>
+        )}
+
+        {/* Jobs Container */}
+        {visitedSegments.has('Jobs') && (
+          <View style={activeSegment === 'Jobs' ? tw`flex` : tw`hidden`}>
+            {filteredJobs.length === 0 && !loadingJobs ? (
+              <View style={tw`py-16 items-center justify-center`}>
+                <Briefcase size={48} color={isDark ? '#52525B' : '#D1D5DB'} />
+                <Text style={[tw`mt-4 text-base font-bold`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
+                  No Job Applications Found
+                </Text>
+              </View>
+            ) : (
+              filteredJobs.map(order => {
               const config = statusConfig[order.status] || {
                 color: '#4B5563',
                 bgColor: '#F3F4F6',
@@ -2285,18 +2414,30 @@ export default function OrdersScreen({
                       elevation: 2,
                     },
                   ]}>
-                  {/* Header Row: Application Tag + Application ID + Status Badge */}
-                  <View style={tw`flex-row items-center justify-between mb-2.5`}>
-                    <View style={[tw`flex-row items-center px-2.5 py-1 rounded-full`, isDark ? tw`bg-purple-950/60` : tw`bg-purple-50`]}>
-                      <Briefcase size={13} color="#8B5CF6" style={tw`mr-1.5`} />
-                      <Text style={tw`text-[11px] font-black text-purple-700 dark:text-purple-400 tracking-wider`}>JOB APPLICATION</Text>
+                  {/* Tier 1 Header: Application Tag + Application ID (Left), Status Badge (Right) */}
+                  <View style={tw`flex-row items-center justify-between mb-2`}>
+                    <View style={tw`flex-row items-center flex-1 mr-2`}>
+                      <View style={[tw`flex-row items-center px-2.5 py-1 rounded-full mr-2`, isDark ? tw`bg-purple-950/60` : tw`bg-purple-50`]}>
+                        <Briefcase size={12} color="#8B5CF6" style={tw`mr-1`} />
+                        <Text style={tw`text-[10px] font-black text-purple-700 dark:text-purple-400 tracking-wider`}>JOB APPLICATION</Text>
+                      </View>
+                      <Text style={[tw`font-extrabold text-sm font-mono`, isDark ? tw`text-white` : tw`text-gray-900`]} numberOfLines={1}>
+                        #{order.id}
+                      </Text>
                     </View>
-
                     <View style={[tw`px-2.5 py-1 rounded-full`, {backgroundColor: config.bgColor}]}>
                       <Text style={[tw`text-[11px] font-bold`, {color: config.color}]}>
                         {order.status}
                       </Text>
                     </View>
+                  </View>
+
+                  {/* Tier 2 Header: Candidate Application Sub-strip */}
+                  <View style={[tw`flex-row items-center justify-between pb-2 mb-2.5 border-b`, isDark ? tw`border-zinc-800` : tw`border-gray-100`]}>
+                    <Text style={[tw`text-[10px] font-bold uppercase text-purple-600 dark:text-purple-400`]}>Direct Application</Text>
+                    <Text style={[tw`text-[11px] font-medium`, isDark ? tw`text-zinc-400` : tw`text-gray-400`]}>
+                      {order.dateTime || 'Applied recently'}
+                    </Text>
                   </View>
 
                   {/* Candidate Name & Contact Details */}
@@ -2377,8 +2518,8 @@ export default function OrdersScreen({
                   </View>
                 </TouchableOpacity>
               );
-            })
-          )
+            }))}
+          </View>
         )}
       </ScrollView>
 

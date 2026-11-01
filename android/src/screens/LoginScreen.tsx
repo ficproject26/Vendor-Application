@@ -29,7 +29,7 @@ import {
   RefreshCw,
 } from 'lucide-react-native';
 import Svg, { Path } from 'react-native-svg';
-import { loginVendor, setToken, setVendorUser } from '../services/apiService';
+import { loginVendor, setToken, setVendorUser, logoutVendor } from '../services/apiService';
 
 // Google "G" icon component
 function GoogleIcon({ size = 20 }: { size?: number }) {
@@ -107,7 +107,79 @@ export default function LoginScreen({ onLogin, onNavigateToSignup, isDark = fals
     try {
       const res = await loginVendor(loginEmail, loginPassword, rememberMe);
       if (res && res.success && res.user) {
+        const u = res.user;
+        const statusLower = String(u.status || u.approvalStatus || '').toLowerCase();
+
+        const isPending = Boolean(
+          res.isPendingApproval ||
+          u.isApproved === false ||
+          [
+            'pending',
+            'submitted',
+            'pending_pincode_approval',
+            'pincode_approved',
+            'kyc_pending',
+            'kyc_in_progress',
+            'payment_pending',
+            'pincode_rejected',
+            'kyc_rejected',
+            'pending pincode admin review',
+          ].includes(statusLower) ||
+          ['pending_pincode_approval', 'pending_kyc_approval', 'pending_payment_approval'].includes(String(u.approvalStatus || '').toLowerCase())
+        );
+
+        const isSuspended = Boolean(
+          u.isSuspended ||
+          u.isLocked ||
+          ['suspended', 'inactive', 'terminated'].includes(statusLower) ||
+          String(u.approvalStatus || '').toLowerCase() === 'suspended'
+        );
+
+        const isRejected = Boolean(
+          res.isRejected ||
+          u.isRejected ||
+          ['rejected', 'cancelled'].includes(statusLower) ||
+          String(u.approvalStatus || '').toLowerCase() === 'rejected'
+        );
+
+        if (isPending) {
+          await logoutVendor();
+          Alert.alert(
+            'Application Under Review',
+            'Your account is currently under review. Your registration is being processed through the required verification and approval stages. Please contact the administration team for further assistance.',
+            [{ text: 'OK' }]
+          );
+          return;
+        }
+
+        if (isSuspended) {
+          await logoutVendor();
+          Alert.alert(
+            'Account Suspended',
+            'Your vendor account has been suspended. Please contact the administrator.',
+            [{ text: 'OK' }]
+          );
+          return;
+        }
+
+        if (isRejected) {
+          await logoutVendor();
+          Alert.alert(
+            'Application Rejected',
+            'Your vendor application was rejected. Please contact the administrator.',
+            [{ text: 'OK' }]
+          );
+          return;
+        }
+
         onLogin(res.user);
+      } else if (res && res.isPendingApproval) {
+        await logoutVendor();
+        Alert.alert(
+          'Application Under Review',
+          'Your account is currently under review. Your registration is being processed through the required verification and approval stages. Please contact the administration team for further assistance.',
+          [{ text: 'OK' }]
+        );
       } else {
         Alert.alert('Login Failed', res?.message || 'Invalid vendor credentials.');
       }

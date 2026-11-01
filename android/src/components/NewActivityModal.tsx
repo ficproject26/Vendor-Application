@@ -53,35 +53,94 @@ export default function NewActivityModal({
   remainingSeconds,
   queueCount = 0,
 }: NewActivityModalProps) {
+  const [localSeconds, setLocalSeconds] = React.useState(15);
+
+  React.useEffect(() => {
+    if (visible && notification) {
+      setLocalSeconds(15);
+      const interval = setInterval(() => {
+        setLocalSeconds(prev => (prev > 1 ? prev - 1 : 1));
+      }, 1000);
+      return () => clearInterval(interval);
+    }
+  }, [visible, notification?.id]);
+
+  const effectiveRemainingSeconds = remainingSeconds !== undefined ? remainingSeconds : localSeconds;
+
   if (!notification) return null;
 
   const raw = notification.raw || {};
-  const isOrder = notification.category === 'Order' || notification.segment === 'Orders';
-  const isBooking = notification.category === 'Booking' || notification.segment === 'Bookings';
-  const isJob = notification.category === 'Job' || notification.segment === 'Jobs';
+  const rawType = String(raw.type || (notification as any).type || '').toLowerCase();
+  const rawCat = String(raw.category || raw.bookingCategory || notification.category || '').toLowerCase();
+  const detailStr = String(raw.product_details || notification.itemName || raw.name || '').toLowerCase();
+  const rawServiceName = String(raw.serviceName || '').toLowerCase();
 
-  const isStay = isBooking && (
-    String(raw.type || '').toLowerCase() === 'stay' ||
-    String(raw.category || '').toLowerCase().includes('stay') ||
-    Boolean(raw.checkInDate)
+  const isJob = notification.category === 'Job' || notification.segment === 'Jobs' || 
+                ['job', 'jobs', 'application', 'job_application'].includes(rawType) || 
+                ['job', 'jobs', 'application', 'job_application'].includes(rawCat) || 
+                Boolean(raw.candidateResume || raw.applicationId);
+
+  const isBooking = notification.category === 'Booking' || notification.segment === 'Bookings' || 
+                    ['booking', 'appointment', 'service', 'services', 'stay', 'travel'].includes(rawType) || 
+                    ['booking', 'stay', 'travel', 'services', 'service'].includes(rawCat);
+
+  const serviceKeywordsRegex = /\b(electrician|plumber|technician|solar|repair|repairs|cctv|cleaning|service|services|consultation|doctor|nurse|clinic|hospital|lineman|mechanic|carpenter|painter|handyman)\b/i;
+
+  const isServiceBooking = isBooking && (
+    serviceKeywordsRegex.test(detailStr) ||
+    serviceKeywordsRegex.test(rawServiceName) ||
+    Boolean(raw.doctorName || raw.patientName || raw.serviceName) ||
+    ['service', 'services', 'appointment'].includes(rawType) ||
+    ['service', 'services'].includes(rawCat)
   );
 
-  const isTravel = isBooking && (
-    String(raw.type || '').toLowerCase() === 'travel' ||
-    String(raw.category || '').toLowerCase().includes('travel') ||
-    Boolean(raw.travelDate) ||
-    Boolean(raw.boardingPoint)
+  const isTravelBooking = isBooking && !isServiceBooking && (
+    Boolean(raw.vehicleNumber || raw.vehicleType || raw.boardingPoint || raw.droppingPoint || raw.travelDate || raw.departureTime || raw.bus_name || raw.busName || raw.busId) ||
+    /\b(bus|flight|train|vehicle|travel|travels|tour|cab|taxi|superbike)\b/i.test(detailStr) ||
+    ['travel', 'travels'].includes(rawCat) ||
+    ['travel', 'travels'].includes(rawType)
   );
 
-  const txTypeTitle = isJob
-    ? 'New Job Application'
-    : isBooking
-    ? isStay
-      ? 'New Stay Booking'
-      : isTravel
-      ? 'New Travel Booking'
-      : 'New Service Booking'
-    : 'New Customer Order';
+  const isStayBooking = isBooking && !isServiceBooking && !isTravelBooking && (
+    Boolean(raw.roomNumber || raw.roomName || raw.staySchedule || raw.hotelName) ||
+    /\b(room|rooms|hotel|hotels|resort|resorts|suite|villa|cottage|homestay|lodge|pg)\b/i.test(detailStr) ||
+    ['stay', 'hotel', 'resort'].includes(rawCat) ||
+    ['stay', 'hotel', 'resort'].includes(rawType)
+  );
+
+  const isFoodOrder = !isJob && !isBooking && (
+    ['food', 'foods', 'restaurant', 'dining'].includes(rawCat) ||
+    ['food', 'foods', 'restaurant'].includes(rawType) ||
+    /food|restaurant|biryani|chicken|pizza|burger|meal|dish/i.test(detailStr)
+  );
+
+  const isDailyNeedsOrder = !isJob && !isBooking && (
+    ['daily needs', 'daily need', 'grocery', 'pharmacy', 'snacks'].includes(rawCat) ||
+    ['daily needs', 'daily need', 'grocery'].includes(rawType)
+  );
+
+  let txTypeTitle = 'New Product Order';
+  if (isJob) {
+    txTypeTitle = 'New Job Application';
+  } else if (isServiceBooking) {
+    txTypeTitle = 'New Service Booking';
+  } else if (isStayBooking) {
+    txTypeTitle = 'New Stay Booking';
+  } else if (isTravelBooking) {
+    txTypeTitle = 'New Travel Booking';
+  } else if (isBooking) {
+    txTypeTitle = 'New Service Booking';
+  } else if (isFoodOrder) {
+    txTypeTitle = 'New Food Order';
+  } else if (isDailyNeedsOrder) {
+    txTypeTitle = 'New Daily Needs Order';
+  } else {
+    txTypeTitle = 'New Product Order';
+  }
+
+  const isOrder = !isJob && !isBooking;
+  const isStay = isStayBooking;
+  const isTravel = isTravelBooking;
 
   const txId = String(raw.order_number || notification.id || raw.id || raw._id || 'TXN');
   const customerName = raw.customer_name || raw.memberName || raw.candidateName || notification.customerName || 'Customer';
@@ -179,13 +238,13 @@ export default function NewActivityModal({
             },
           ]}>
           {/* 15s Auto-Dismiss Progress Bar */}
-          {remainingSeconds !== undefined ? (
+          {effectiveRemainingSeconds !== undefined ? (
             <View style={[tw`w-full h-1.5 rounded-full overflow-hidden mb-3`, isDark ? tw`bg-zinc-800` : tw`bg-gray-100`]}>
               <View
                 style={[
                   tw`h-full rounded-full`,
                   {
-                    width: `${Math.max(0, Math.min(100, (remainingSeconds / 15) * 100))}%`,
+                    width: `${Math.max(0, Math.min(100, (effectiveRemainingSeconds / 15) * 100))}%`,
                     backgroundColor: isOrder ? '#059669' : isBooking ? '#4F46E5' : '#7C3AED',
                   },
                 ]}
@@ -223,11 +282,11 @@ export default function NewActivityModal({
                 <Text style={[tw`text-[11px] font-mono mt-0.5`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
                   #{txId} • {dateTimeStr}
                 </Text>
-                {remainingSeconds !== undefined ? (
+                {effectiveRemainingSeconds !== undefined ? (
                   <View style={[tw`mt-1.5 self-start px-2 py-0.5 rounded-full flex-row items-center border`, isDark ? tw`bg-zinc-800/80 border-zinc-700` : tw`bg-indigo-50 border-indigo-200`]}>
                     <Clock size={10} color={isDark ? '#A1A1AA' : '#4F46E5'} style={tw`mr-1`} />
                     <Text style={[tw`text-[10px] font-bold`, isDark ? tw`text-zinc-300` : tw`text-indigo-700`]}>
-                      Auto-dismiss in {remainingSeconds}s
+                      Auto-dismiss in {effectiveRemainingSeconds}s
                     </Text>
                     {queueCount !== undefined && queueCount > 0 ? (
                       <Text style={tw`ml-1 text-[9px] font-black text-amber-600`}>

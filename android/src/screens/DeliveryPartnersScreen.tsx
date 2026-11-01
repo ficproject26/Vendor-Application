@@ -1,5 +1,6 @@
 import React, {useState, useEffect} from 'react';
-import { fetchDeliveryPartners, createDeliveryPartner } from '../services/apiService';
+import { fetchDeliveryPartners, createDeliveryPartner, getVendorUser } from '../services/apiService';
+import sessionManager from '../services/sessionManager';
 import {
   View,
   Text,
@@ -130,12 +131,17 @@ const formCategories = [
 
 export default function DeliveryPartnersScreen({
   onNavigate,
+  onBack,
   isDark = false,
 }: {
   onNavigate?: (tab: 'Home' | 'Orders' | 'Business' | 'Payments' | 'Profile') => void;
+  onBack?: () => void;
   isDark?: boolean;
 }) {
   const insets = useSafeAreaInsets();
+  const currentUser = getVendorUser();
+  const vendorId = currentUser?._id || currentUser?.id || 'default';
+
   const [partners, setPartners] = useState<Partner[]>(initialPartners);
   const [bookings] = useState<Record<string, Booking[]>>(initialBookings);
   const [activeFilter, setActiveFilter] = useState<PartnerStatus>('All');
@@ -143,6 +149,7 @@ export default function DeliveryPartnersScreen({
   // Modals Visibility
   const [isAddPartnerVisible, setIsAddPartnerVisible] = useState(false);
   const [selectedPartnerForBookings, setSelectedPartnerForBookings] = useState<Partner | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Active form section step
   const [activeFormTab, setActiveFormTab] = useState(0);
@@ -183,14 +190,16 @@ export default function DeliveryPartnersScreen({
     try {
       const data = await fetchDeliveryPartners();
       if (Array.isArray(data)) {
-        setPartners(data.map((p: any) => ({
+        const mapped = data.map((p: any) => ({
           id: p._id || p.id,
           name: p.name,
           avatar: p.avatar || p.profilePhoto || '',
           status: (p.status === 'Available' || p.status === 'Busy' || p.status === 'Offline') ? p.status : 'Available',
           rating: p.rating || 0,
           phone: p.phone || p.mobileNumber || '',
-        })));
+        }));
+        setPartners(mapped);
+        sessionManager.saveVendorCache(vendorId, 'delivery_partners', mapped);
       }
     } catch (err: any) {
       console.warn('Failed to load delivery partners:', err.message);
@@ -198,10 +207,19 @@ export default function DeliveryPartnersScreen({
   };
 
   useEffect(() => {
+    // 1. Instant Cache Hydration (<10ms)
+    sessionManager.getVendorCache(vendorId, 'delivery_partners').then(cached => {
+      if (Array.isArray(cached) && cached.length > 0) {
+        setPartners(cached);
+      }
+    });
+
+    // 2. Background Revalidation
     loadPartners();
   }, []);
 
   const handleAddPartner = async () => {
+    if (isSubmitting) return;
     if (!formState.fullName.trim()) {
       setActiveFormTab(0);
       Alert.alert('Required', 'Please enter partner Full Name in Personal Information');
@@ -213,6 +231,7 @@ export default function DeliveryPartnersScreen({
       return;
     }
 
+    setIsSubmitting(true);
     try {
       const payload = {
         name: formState.fullName.trim(),
@@ -249,6 +268,8 @@ export default function DeliveryPartnersScreen({
       await loadPartners();
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Failed to save delivery partner to database.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -904,7 +925,7 @@ export default function DeliveryPartnersScreen({
         <View style={tw`flex-row items-center justify-between mb-4`}>
           <View style={tw`flex-row items-center`}>
             <TouchableOpacity
-              onPress={() => onNavigate?.('Home')}
+              onPress={() => onBack ? onBack() : onNavigate?.('Home')}
               style={[tw`mr-3 p-1.5 rounded-full`, isDark ? tw`bg-zinc-800` : tw`bg-gray-100`]}>
               <ArrowLeft size={20} color={isDark ? '#E4E4E7' : '#1F2937'} />
             </TouchableOpacity>

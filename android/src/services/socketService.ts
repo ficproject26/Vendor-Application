@@ -1,7 +1,8 @@
 import { io, Socket } from 'socket.io-client';
-import { Platform } from 'react-native';
+import { Platform, AppState } from 'react-native';
 import { getToken, getVendorUser, fetchOrders, fetchBookings, fetchApplications, getWorkingSocketUrl } from './apiService';
 import { soundNotificationService } from './soundNotificationService';
+import { sessionManager } from './sessionManager';
 import { SOCKET_URL_ANDROID, SOCKET_URL_IOS } from './env';
 import { VendorActivityNotification } from '../components/NotificationBanner';
 
@@ -18,6 +19,7 @@ class VendorSocketService {
   private statusListeners: Set<StatusCallback> = new Set();
   private notificationListeners: Set<NotificationCallback> = new Set();
   private processedOrderIds: Set<string> = new Set();
+  private orderStatusMap: Map<string, string> = new Map();
   private activeToken: string | null = null;
   private pollInterval: ReturnType<typeof setInterval> | null = null;
   private isInitialSeeded: boolean = false;
@@ -37,11 +39,14 @@ class VendorSocketService {
     if (Array.isArray(orders)) {
       orders.forEach((o) => {
         const id = (o._id || o.id || o.order_number || o.applicationId || '').toString();
+        const st = String(o.status || o.orderStatus || '');
         if (id) {
           this.processedOrderIds.add(id);
+          if (st) this.orderStatusMap.set(id, st);
         }
         if (o.order_number) {
           this.processedOrderIds.add(o.order_number.toString());
+          if (st) this.orderStatusMap.set(o.order_number.toString(), st);
         }
       });
       this.isInitialSeeded = true;
@@ -153,7 +158,9 @@ class VendorSocketService {
       raw.boardingPoint ||
       raw.boarding_point ||
       raw.checkInDate ||
-      raw.bus_name
+      raw.bus_name ||
+      raw.vehicleNumber ||
+      raw.vehicleType
     );
 
     if (isServiceBooking) {
@@ -173,10 +180,39 @@ class VendorSocketService {
 
       const status = raw.status || 'Pending';
 
+      // Dynamic Booking Title Resolution
+      const detailStr = String(raw.product_details || serviceName || '').toLowerCase();
+      const rawServiceName = String(raw.serviceName || '').toLowerCase();
+      const serviceKeywordsRegex = /\b(electrician|plumber|technician|solar|repair|repairs|cctv|cleaning|service|services|consultation|doctor|nurse|clinic|hospital|lineman|mechanic|carpenter|painter|handyman)\b/i;
+
+      const isService = serviceKeywordsRegex.test(detailStr) ||
+                        serviceKeywordsRegex.test(rawServiceName) ||
+                        Boolean(raw.doctorName || raw.patientName || raw.serviceName) ||
+                        ['service', 'services', 'appointment'].includes(typeStr) ||
+                        ['service', 'services'].includes(catStr);
+
+      const isTravel = !isService && (
+        Boolean(raw.vehicleNumber || raw.vehicleType || raw.boardingPoint || raw.droppingPoint || raw.travelDate || raw.departureTime || raw.bus_name || raw.busName || raw.busId) ||
+        /\b(bus|flight|train|vehicle|travel|travels|tour|cab|taxi|superbike)\b/i.test(detailStr) ||
+        ['travel', 'travels'].includes(catStr) ||
+        ['travel', 'travels'].includes(typeStr)
+      );
+
+      const isStay = !isService && !isTravel && (
+        Boolean(raw.roomNumber || raw.roomName || raw.staySchedule || raw.hotelName) ||
+        /\b(room|rooms|hotel|hotels|resort|resorts|suite|villa|cottage|homestay|lodge|pg)\b/i.test(detailStr) ||
+        ['stay', 'hotel', 'resort'].includes(catStr) ||
+        ['stay', 'hotel', 'resort'].includes(typeStr)
+      );
+
+      let bookingTitle = 'New Service Booking';
+      if (isStay) bookingTitle = 'New Stay Booking';
+      else if (isTravel) bookingTitle = 'New Travel Booking';
+
       return {
         id,
         category: 'Booking',
-        title: 'New Service Booking',
+        title: bookingTitle,
         customerName: primaryPassenger,
         itemName: serviceName,
         dateTime: bookingDate,
@@ -193,7 +229,7 @@ class VendorSocketService {
     const items = Array.isArray(raw.items) && raw.items.length > 0 ? raw.items : [];
     const productName = items.length > 0
       ? items.map((i: any) => i.name).join(', ')
-      : (raw.product_details || 'Product Order');
+      : (raw.product_details || 'Order Item');
 
     const totalQty = items.length > 0
       ? items.reduce((acc: number, curr: any) => acc + (Number(curr.quantity || curr.qty || 1)), 0)
@@ -206,10 +242,22 @@ class VendorSocketService {
     const status = raw.status || 'Placed';
     const finalAmount = raw.finalAmount || raw.totalAmount || raw.amount || 0;
 
+    const detailStr = String(raw.product_details || productName || '').toLowerCase();
+    const isFood = ['food', 'foods', 'restaurant', 'dining'].includes(catStr) ||
+                   ['food', 'foods', 'restaurant'].includes(typeStr) ||
+                   /food|restaurant|biryani|chicken|pizza|burger|meal|dish/i.test(detailStr);
+
+    const isDailyNeeds = ['daily needs', 'daily need', 'grocery', 'pharmacy', 'snacks'].includes(catStr) ||
+                         ['daily needs', 'daily need', 'grocery'].includes(typeStr);
+
+    let orderTitle = 'New Product Order';
+    if (isFood) orderTitle = 'New Food Order';
+    else if (isDailyNeeds) orderTitle = 'New Daily Needs Order';
+
     return {
       id,
       category: 'Order',
-      title: 'New Product Order',
+      title: orderTitle,
       customerName,
       itemName: productName,
       quantity: totalQty,
@@ -269,26 +317,32 @@ class VendorSocketService {
 
     console.log(`🔔 [VendorSocketService] New ${notification.category} Alert: ${notification.id} - ${notification.itemName}, listeners: ${this.notificationListeners.size}`);
 
-    // Trigger native system tray notification and dispatch to screen data listeners
+    // Persist to local notification history for Notification Center retention
+    try {
+      const currentUser = getVendorUser();
+      const vendorId = currentUser?.vendorId || currentUser?._id || currentUser?.id || 'vendor_default';
+      sessionManager.saveNotificationToHistory(vendorId, notification).catch(() => {});
+    } catch {}
+
+    // Always trigger native system tray notification with sound and vibration
     if (notification.category === 'Booking') {
       soundNotificationService.showBookingNotification(rawItem, true);
+    } else if (notification.category === 'Job') {
+      soundNotificationService.showJobApplicationNotification(rawItem, true);
+    } else {
+      soundNotificationService.showNewOrderNotification(rawItem);
+    }
+
+    // Always dispatch to data listeners
+    if (notification.category === 'Booking') {
       this.bookingListeners.forEach(cb => {
         try { cb(rawItem); } catch (e) { console.error('Booking listener err:', e); }
       });
     } else if (notification.category === 'Job') {
-      soundNotificationService.showSystemNotification({
-        title: 'New Candidate Application',
-        message: `${notification.customerName || 'Candidate'} applied for ${notification.itemName}`,
-        targetId: notification.id,
-        category: 'Jobs',
-        segment: 'jobs',
-        playSound: true,
-      });
       this.jobListeners.forEach(cb => {
         try { cb(rawItem); } catch (e) { console.error('Job listener err:', e); }
       });
     } else {
-      soundNotificationService.showNewOrderNotification(rawItem);
       this.newOrderListeners.forEach(cb => {
         try { cb(rawItem); } catch (e) { console.error('Order listener err:', e); }
       });
@@ -347,12 +401,33 @@ class VendorSocketService {
             return;
           }
 
-          // Check for any item not yet processed
+          // Check for any item not yet processed, or any status changes
           for (const item of allLatest) {
             const oid = (item._id || item.id || item.order_number || item.applicationId || '').toString();
             const onum = (item.order_number || '').toString();
-            if ((oid && !this.processedOrderIds.has(oid)) || (onum && !this.processedOrderIds.has(onum))) {
+            const currentStatus = String(item.status || item.orderStatus || '');
+
+            if ((oid && !this.processedOrderIds.has(oid)) && (onum && !this.processedOrderIds.has(onum))) {
               this.processNewItem(item);
+              if (oid && currentStatus) this.orderStatusMap.set(oid, currentStatus);
+              if (onum && currentStatus) this.orderStatusMap.set(onum, currentStatus);
+            } else {
+              // Existing order: check if status changed
+              const key = oid || onum;
+              if (key && currentStatus) {
+                const prevStatus = this.orderStatusMap.get(key);
+                if (prevStatus && prevStatus !== currentStatus) {
+                  this.orderStatusMap.set(key, currentStatus);
+                  this.handleStatusEvent({
+                    data: item,
+                    order: item,
+                    status: currentStatus,
+                    previousStatus: prevStatus
+                  });
+                } else if (!prevStatus) {
+                  this.orderStatusMap.set(key, currentStatus);
+                }
+              }
             }
           }
         }
@@ -482,15 +557,22 @@ class VendorSocketService {
       });
     });
 
-    // 3. Status Changed Handler
-    this.socket.on('ORDER_STATUS_CHANGED', (statusData: any) => {
-      this.handleStatusEvent(statusData);
-    });
-    this.socket.on('order:status_changed', (statusData: any) => {
-      this.handleStatusEvent(statusData);
-    });
-    this.socket.on('order_status_updated', (statusData: any) => {
-      this.handleStatusEvent(statusData);
+    // 3. Status Changed Handlers across Orders, Bookings and Job Applications
+    const statusEvents = [
+      'ORDER_STATUS_CHANGED',
+      'order:status_changed',
+      'order_status_updated',
+      'BOOKING_STATUS_CHANGED',
+      'booking:status_changed',
+      'booking_status_updated',
+      'APPLICATION_STATUS_CHANGED',
+      'application:status_changed',
+      'application_status_updated'
+    ];
+    statusEvents.forEach((evName) => {
+      this.socket?.on(evName, (statusData: any) => {
+        this.handleStatusEvent(statusData);
+      });
     });
 
     // 4. Payment Events Handler
@@ -537,15 +619,66 @@ class VendorSocketService {
   }
 
   /**
-   * Handle status updates
+   * Handle status updates across Orders, Bookings, and Job Applications
    */
   private handleStatusEvent(statusData: any) {
-    const raw = statusData?.data || statusData?.order || statusData;
-    const status = raw?.status || raw?.orderStatus || 'Updated';
-    if (raw) {
-      soundNotificationService.showOrderStatusNotification(raw, status);
+    if (!statusData) return;
+    const raw = statusData?.data || statusData?.order || statusData?.updated || statusData;
+    if (!raw) return;
+
+    const targetVid = statusData?.target?.vendorId || statusData?.target?.userId;
+    if (!this.isOrderForCurrentVendor(raw, targetVid)) {
+      return; // Scoped to another vendor
     }
 
+    const orderId = (raw?.order_number || raw?.id || raw?._id || raw?.orderId || raw?.applicationId || '').toString();
+    const status = (raw?.newStatus || raw?.status || raw?.orderStatus || statusData?.status || 'Updated').toString();
+    const previousStatus = (raw?.previousStatus || statusData?.previousStatus || '').toString();
+
+    // Deduplicate identical status events
+    const dedupeKey = `${orderId}_status_${status}`;
+    if (this.processedOrderIds.has(dedupeKey)) {
+      return;
+    }
+    this.processedOrderIds.add(dedupeKey);
+    if (orderId && status) {
+      this.orderStatusMap.set(orderId, status);
+    }
+
+    // Format notification
+    const notification = this.parseActivityNotification(raw);
+    if (!notification) return;
+
+    const description = raw?.description || statusData?.description || (previousStatus && previousStatus !== status ? `Status changed from "${previousStatus}" to "${status}"` : `Status updated to ${status}`);
+
+    notification.title = `${notification.category === 'Job' ? 'Job Application' : notification.category} Status Updated`;
+    notification.previousStatus = previousStatus;
+    notification.newStatus = status;
+    notification.status = status;
+    notification.description = description;
+    notification.isStatusUpdate = true;
+
+    // Trigger audio chime & native system notification in notification tray
+    soundNotificationService.showOrderStatusNotification(raw, status, previousStatus);
+
+    // Persist to local notification history for Notification Center retention
+    try {
+      const currentUser = getVendorUser();
+      const vendorId = currentUser?.vendorId || currentUser?._id || currentUser?.id || 'vendor_default';
+      sessionManager.saveNotificationToHistory(vendorId, notification).catch(() => {});
+    } catch {}
+
+    // Dispatch to in-app foreground banner & modal listeners (15s auto-dismiss popup)
+    this.notificationListeners.forEach((callback) => {
+      try {
+        console.log('🚀 [socketService] Invoking status notification callback for:', notification.id);
+        callback(notification);
+      } catch (err) {
+        console.error('[VendorSocketService] Status notification callback error:', err);
+      }
+    });
+
+    // Notify data listeners
     this.statusListeners.forEach((callback) => {
       try {
         callback(statusData);

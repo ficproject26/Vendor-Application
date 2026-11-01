@@ -31,18 +31,25 @@ import {
   fetchVendorTickets,
   createVendorTicket,
   replyVendorTicket,
+  getVendorUser,
 } from '../services/apiService';
+import sessionManager from '../services/sessionManager';
 
 interface QueriesScreenProps {
   onNavigate?: (tab: any) => void;
+  onBack?: () => void;
   isDark?: boolean;
 }
 
 export default function QueriesScreen({
   onNavigate,
+  onBack,
   isDark = false,
 }: QueriesScreenProps) {
   const insets = useSafeAreaInsets();
+  const currentUser = getVendorUser();
+  const vendorId = currentUser?._id || currentUser?.id || 'default';
+
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [tickets, setTickets] = useState<any[]>([]);
@@ -65,6 +72,7 @@ export default function QueriesScreen({
       const res = await fetchVendorTickets();
       if (res && res.success && Array.isArray(res.tickets)) {
         setTickets(res.tickets);
+        sessionManager.saveVendorCache(vendorId, 'vendor_tickets', res.tickets);
         // Refresh active selected ticket if open
         if (selectedTicket) {
           const fresh = res.tickets.find((t: any) => t._id === selectedTicket._id);
@@ -80,6 +88,15 @@ export default function QueriesScreen({
   };
 
   useEffect(() => {
+    // 1. Instant Cache Hydration (<10ms)
+    sessionManager.getVendorCache(vendorId, 'vendor_tickets').then(cached => {
+      if (Array.isArray(cached) && cached.length > 0) {
+        setTickets(cached);
+        setLoading(false);
+      }
+    });
+
+    // 2. Background Revalidation
     loadTickets();
   }, []);
 
@@ -89,6 +106,7 @@ export default function QueriesScreen({
   };
 
   const handleCreateTicket = async () => {
+    if (submitting) return;
     if (!newSubject.trim()) {
       Alert.alert('Required Field', 'Please enter a ticket subject.');
       return;
@@ -124,7 +142,7 @@ export default function QueriesScreen({
   };
 
   const handleSendReply = async () => {
-    if (!replyText.trim() || !selectedTicket?._id) return;
+    if (sendingReply || !replyText.trim() || !selectedTicket?._id) return;
     setSendingReply(true);
     try {
       const res = await replyVendorTicket(selectedTicket._id, replyText.trim());
@@ -157,7 +175,7 @@ export default function QueriesScreen({
         ]}>
         <View style={tw`flex-row items-center`}>
           <TouchableOpacity
-            onPress={() => onNavigate?.('Profile')}
+            onPress={() => onBack ? onBack() : onNavigate?.('Profile')}
             activeOpacity={0.7}
             style={[
               tw`w-10 h-10 rounded-full items-center justify-center mr-3`,

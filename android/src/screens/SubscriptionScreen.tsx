@@ -33,17 +33,23 @@ import {
   verifySubscriptionPayment,
   getVendorUser,
 } from '../services/apiService';
+import sessionManager from '../services/sessionManager';
 
 interface SubscriptionScreenProps {
   onNavigate?: (tab: any) => void;
+  onBack?: () => void;
   isDark?: boolean;
 }
 
 export default function SubscriptionScreen({
   onNavigate,
+  onBack,
   isDark = false,
 }: SubscriptionScreenProps) {
   const insets = useSafeAreaInsets();
+  const currentUser = getVendorUser();
+  const vendorId = currentUser?._id || currentUser?.id || 'default';
+
   const [selectedTab, setSelectedTab] = useState<'plans' | 'history'>('plans');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -63,41 +69,53 @@ export default function SubscriptionScreen({
         fetchSubscriptionHistory().catch(() => null),
       ]);
 
+      let updatedSubs = subscriptionsList;
+      let updatedSummary = summary;
+      let updatedHistory = historyList;
+
       if (subsRes && subsRes.success) {
         const rawBusinesses = subsRes.businesses || subsRes.subscriptions || [];
-        setSubscriptionsList(rawBusinesses);
+        updatedSubs = rawBusinesses;
+        setSubscriptionsList(updatedSubs);
         if (subsRes.summary) {
           const totalPaid = subsRes.summary.totalAmountPaid !== undefined ? subsRes.summary.totalAmountPaid : (subsRes.summary.totalPaid || 0);
           const activeCount = subsRes.summary.totalActiveSubscriptions !== undefined ? subsRes.summary.totalActiveSubscriptions : (subsRes.summary.activeCount || 0);
           const totalSubs = subsRes.summary.totalSubscriptions || 0;
           const expiredCount = subsRes.summary.expiredCount !== undefined ? subsRes.summary.expiredCount : Math.max(0, totalSubs - activeCount);
-          setSummary({
+          updatedSummary = {
             totalPaid,
             activeCount,
             expiredCount,
             nextExpiry: subsRes.summary.nextExpiry || null,
-          });
+          };
+          setSummary(updatedSummary);
         }
       } else {
         // Fallback to user businesses from session
         const user = getVendorUser();
         const bizList = user?.businesses || [];
-        setSubscriptionsList(
-          bizList.map((b: any) => ({
-            businessId: b._id || b.id,
-            businessName: b.businessName || 'Business Outlet',
-            category: b.vendorType || b.category || 'General',
-            status: ['active', 'approved'].includes(String(b.status || '').toLowerCase()) ? 'Active' : 'Not Subscribed',
-            validUntil: b.subscriptionExpiresAt || null,
-            amount: 1000,
-          }))
-        );
+        updatedSubs = bizList.map((b: any) => ({
+          businessId: b._id || b.id,
+          businessName: b.businessName || 'Business Outlet',
+          category: b.vendorType || b.category || 'General',
+          status: ['active', 'approved'].includes(String(b.status || '').toLowerCase()) ? 'Active' : 'Not Subscribed',
+          validUntil: b.subscriptionExpiresAt || null,
+          amount: 1000,
+        }));
+        setSubscriptionsList(updatedSubs);
       }
 
       if (histRes && histRes.success) {
         const rawHistory = histRes.history || histRes.transactions || [];
-        setHistoryList(rawHistory);
+        updatedHistory = rawHistory;
+        setHistoryList(updatedHistory);
       }
+
+      sessionManager.saveVendorCache(vendorId, 'subscriptions', {
+        subscriptionsList: updatedSubs,
+        summary: updatedSummary,
+        historyList: updatedHistory,
+      });
     } catch (err) {
       console.warn('[SubscriptionScreen] Error loading subscription data:', err);
     } finally {
@@ -107,6 +125,17 @@ export default function SubscriptionScreen({
   };
 
   useEffect(() => {
+    // 1. Instant Cache Hydration (<10ms)
+    sessionManager.getVendorCache(vendorId, 'subscriptions').then(cached => {
+      if (cached) {
+        if (cached.subscriptionsList) setSubscriptionsList(cached.subscriptionsList);
+        if (cached.summary) setSummary(cached.summary);
+        if (cached.historyList) setHistoryList(cached.historyList);
+        setLoading(false);
+      }
+    });
+
+    // 2. Background Revalidation
     loadData();
   }, []);
 
@@ -174,7 +203,7 @@ export default function SubscriptionScreen({
         ]}>
         <View style={tw`flex-row items-center`}>
           <TouchableOpacity
-            onPress={() => onNavigate?.('Profile')}
+            onPress={() => onBack ? onBack() : onNavigate?.('Profile')}
             activeOpacity={0.7}
             style={[
               tw`w-10 h-10 rounded-full items-center justify-center mr-3`,

@@ -1,5 +1,5 @@
 import React, {useState, useEffect, useRef, useCallback} from 'react';
-import {View, Text, TouchableOpacity, useColorScheme, PermissionsAndroid, Platform, AppState} from 'react-native';
+import {View, Text, TouchableOpacity, useColorScheme, PermissionsAndroid, Platform, AppState, BackHandler, ToastAndroid, Alert} from 'react-native';
 import {SafeAreaProvider} from 'react-native-safe-area-context';
 import tw, { useAppColorScheme } from 'twrnc';
 
@@ -89,11 +89,21 @@ import NotificationBanner, { VendorActivityNotification } from './android/src/co
 import NewActivityModal from './android/src/components/NewActivityModal';
 import { socketService } from './android/src/services/socketService';
 import { soundNotificationService, NotificationTapEvent } from './android/src/services/soundNotificationService';
+import { registerDeviceToken } from './android/src/services/apiService';
+
+let messagingModule: any = null;
+try {
+  messagingModule = require('@react-native-firebase/messaging').default;
+} catch (e) {
+  console.warn('[App] Firebase Messaging module fallback');
+}
 
 export type CategoryKey = 'Products' | 'Services' | 'Food' | 'Travel' | 'Stay' | 'Jobs' | 'Daily Needs';
 
 export interface BusinessItem {
   id: string;
+  businessId?: string;
+  vendorId?: string;
   name: string;
   detail: string;
   price: string;
@@ -258,12 +268,41 @@ function App() {
   // Automatic persistent session restoration on app launch
   useEffect(() => {
     let isMounted = true;
+    const isUserApproved = (u: any) => {
+      if (!u) return false;
+      if (u.isSuspended || u.isLocked) return false;
+      const status = String(u.status || '').toLowerCase();
+      const approval = String(u.approvalStatus || '').toLowerCase();
+      if (['suspended', 'inactive', 'terminated'].includes(status) || approval === 'suspended') return false;
+      if (['rejected', 'cancelled'].includes(status) || approval === 'rejected') return false;
+      if (u.isApproved === false) return false;
+      if (
+        ['pending', 'submitted', 'pending_pincode_approval', 'kyc_pending', 'kyc_in_progress', 'payment_pending', 'pending pincode admin review'].includes(status) ||
+        ['pending_pincode_approval', 'pending_kyc_approval', 'pending_payment_approval'].includes(approval)
+      ) {
+        return false;
+      }
+      return true;
+    };
+
     const restoreSession = async () => {
       try {
         const stored = await sessionManager.loadSession();
         if (!stored || !stored.token || !stored.user) {
           if (isMounted) {
             setIsLoggedIn(false);
+            setIsInitializing(false);
+          }
+          return;
+        }
+
+        // Verify that stored user account is approved before granting dashboard access
+        if (!isUserApproved(stored.user)) {
+          console.warn('[App] Stored user is not approved/active. Redirecting to login.');
+          await logoutVendor();
+          if (isMounted) {
+            setIsLoggedIn(false);
+            setCurrentUser(null);
             setIsInitializing(false);
           }
           return;
@@ -285,6 +324,15 @@ function App() {
           if (!isMounted) return;
           if (validation.valid) {
             if (validation.user) {
+              if (!isUserApproved(validation.user)) {
+                console.warn('[App] Validated user is under review or not active. Logging out.');
+                await logoutVendor();
+                if (isMounted) {
+                  setIsLoggedIn(false);
+                  setCurrentUser(null);
+                }
+                return;
+              }
               setVendorUser(validation.user);
               setCurrentUser(validation.user);
               await sessionManager.saveSession(stored.token, validation.user, stored.rememberMe);
@@ -346,10 +394,12 @@ function App() {
     setIsLoggedIn(false);
     setActiveNotification(null);
     socketService.disconnect();
+    setNavigationHistory([]);
     setActiveTab('Home'); // Reset active tab when logging out
   };
   
   const [activeTab, setActiveTab] = useState<Tab>('Home');
+  const [navigationHistory, setNavigationHistory] = useState<Array<{ tab: Tab; params?: any }>>([]);
   const [visitedTabs, setVisitedTabs] = useState<Set<Tab>>(new Set(['Home']));
   const [businessTabParams, setBusinessTabParams] = useState<any>(null);
   const [ordersTabParams, setOrdersTabParams] = useState<{ segment?: 'Orders' | 'Bookings' | 'Jobs'; targetId?: string } | null>(null);
@@ -357,19 +407,13 @@ function App() {
   const [modalNotification, setModalNotification] = useState<VendorActivityNotification | null>(null);
   const [isActivityModalVisible, setIsActivityModalVisible] = useState(false);
   const [isOrderActionProcessing, setIsOrderActionProcessing] = useState(false);
-  const [modalRemainingSeconds, setModalRemainingSeconds] = useState(15);
   const modalTimerRef = useRef<any>(null);
-  const modalIntervalRef = useRef<any>(null);
   const modalQueueRef = useRef<VendorActivityNotification[]>([]);
 
   const clearModalTimers = useCallback(() => {
     if (modalTimerRef.current) {
       clearTimeout(modalTimerRef.current);
       modalTimerRef.current = null;
-    }
-    if (modalIntervalRef.current) {
-      clearInterval(modalIntervalRef.current);
-      modalIntervalRef.current = null;
     }
   }, []);
 
@@ -382,7 +426,6 @@ function App() {
     } else {
       setIsActivityModalVisible(false);
       setModalNotification(null);
-      setModalRemainingSeconds(15);
     }
   }, [clearModalTimers]);
 
@@ -391,17 +434,12 @@ function App() {
     clearModalTimers();
     setModalNotification(notif);
     setIsActivityModalVisible(true);
-    setModalRemainingSeconds(15);
+    soundNotificationService.playNewOrderSound();
 
     // Exact 15-second auto-dismiss timer
     modalTimerRef.current = setTimeout(() => {
       dismissCurrentModal();
     }, 15000);
-
-    // 1-second countdown interval
-    modalIntervalRef.current = setInterval(() => {
-      setModalRemainingSeconds((prev) => (prev > 1 ? prev - 1 : 1));
-    }, 1000);
   }, [clearModalTimers, dismissCurrentModal]);
 
   const enqueueOrDisplayModalNotification = useCallback((notif: VendorActivityNotification) => {
@@ -455,7 +493,17 @@ function App() {
     handleNavigate('Orders', { segment: notif.segment, targetId: notif.id });
   };
 
-  const handleNavigate = (tab: Tab, params?: any) => {
+  const handleNavigate = useCallback((tab: Tab, params?: any) => {
+    setActiveTab(prevTab => {
+      if (prevTab !== tab) {
+        setNavigationHistory(h => {
+          const prevParams = prevTab === 'Business' ? businessTabParams : prevTab === 'Orders' ? ordersTabParams : undefined;
+          return [...h, { tab: prevTab, params: prevParams }].slice(-50);
+        });
+      }
+      return tab;
+    });
+
     if (tab === 'Business') {
       setBusinessTabParams(params || null);
     }
@@ -463,25 +511,123 @@ function App() {
       setOrdersTabParams(params || null);
     }
     setVisitedTabs(prev => new Set(prev).add(tab));
-    setActiveTab(tab);
-  };
+  }, [businessTabParams, ordersTabParams]);
 
-  // Request Android 13+ POST_NOTIFICATIONS Permission on Mount
+  const handleBack = useCallback(() => {
+    if (navigationHistory.length > 0) {
+      setNavigationHistory(prev => {
+        if (prev.length === 0) return prev;
+        const newHist = [...prev];
+        const last = newHist.pop()!;
+        setActiveTab(last.tab);
+        if (last.tab === 'Business') setBusinessTabParams(last.params || null);
+        if (last.tab === 'Orders') setOrdersTabParams(last.params || null);
+        return newHist;
+      });
+      return true;
+    }
+    if (activeTab !== 'Home') {
+      setActiveTab('Home');
+      return true;
+    }
+    return false;
+  }, [navigationHistory, activeTab]);
+
+  // Global Android Hardware Back Button Handler
+  const lastBackPressRef = useRef<number>(0);
   useEffect(() => {
-    const requestNotificationPermission = async () => {
+    const onHardwareBack = () => {
+      // 1. If activity modal is visible, close it first
+      if (isActivityModalVisible) {
+        dismissCurrentModal();
+        return true;
+      }
+      // 2. If active activity banner is showing, dismiss it
+      if (activeNotification) {
+        setActiveNotification(null);
+        return true;
+      }
+      // 3. If there is navigation history, pop to previous screen
+      if (navigationHistory.length > 0) {
+        handleBack();
+        return true;
+      }
+      // 4. If on secondary tab other than Home, navigate back to Home
+      if (activeTab !== 'Home') {
+        setActiveTab('Home');
+        return true;
+      }
+      // 5. At root Home with empty history: Double tap within 2s to exit
+      const now = Date.now();
+      if (now - lastBackPressRef.current < 2000) {
+        BackHandler.exitApp();
+        return true;
+      }
+      lastBackPressRef.current = now;
+      if (Platform.OS === 'android') {
+        ToastAndroid.show('Press back again to exit', ToastAndroid.SHORT);
+      }
+      return true;
+    };
+
+    const sub = BackHandler.addEventListener('hardwareBackPress', onHardwareBack);
+    return () => sub.remove();
+  }, [isActivityModalVisible, activeNotification, navigationHistory, activeTab, dismissCurrentModal, handleBack]);
+
+  // Request Android 13+ POST_NOTIFICATIONS Permission & Register FCM Token
+  useEffect(() => {
+    const initNotificationsAndToken = async () => {
+      let hasPermission = true;
       if (Platform.OS === 'android' && Platform.Version >= 33) {
         try {
           const granted = await PermissionsAndroid.request(
             PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS
           );
+          hasPermission = granted === PermissionsAndroid.RESULTS.GRANTED;
           console.log('[App] POST_NOTIFICATIONS status:', granted);
         } catch (err) {
           console.warn('[App] Error requesting POST_NOTIFICATIONS:', err);
         }
       }
+
+      if (messagingModule && hasPermission) {
+        try {
+          const authStatus = await messagingModule().requestPermission();
+          const enabled =
+            authStatus === messagingModule.AuthorizationStatus.AUTHORIZED ||
+            authStatus === messagingModule.AuthorizationStatus.PROVISIONAL;
+          console.log('[App] FCM Auth Status:', authStatus, 'Enabled:', enabled);
+
+          if (enabled) {
+            const token = await messagingModule().getToken();
+            if (token) {
+              console.log('🔥 [App] FCM Device Token obtained:', token);
+              await registerDeviceToken(token);
+            }
+          }
+        } catch (fcmErr: any) {
+          console.warn('[App] FCM Token registration notice:', fcmErr?.message || fcmErr);
+        }
+      }
     };
-    requestNotificationPermission();
-  }, []);
+
+    initNotificationsAndToken();
+
+    // Listen for FCM token refresh events
+    let unsubscribeTokenRefresh: (() => void) | null = null;
+    if (messagingModule) {
+      try {
+        unsubscribeTokenRefresh = messagingModule().onTokenRefresh(async (newToken: string) => {
+          console.log('🔄 [App] FCM Token refreshed:', newToken);
+          await registerDeviceToken(newToken);
+        });
+      } catch (e) {}
+    }
+
+    return () => {
+      if (unsubscribeTokenRefresh) unsubscribeTokenRefresh();
+    };
+  }, [isLoggedIn]);
 
   // Handle system notification tap routing
   const routeNotificationTap = (tapData: NotificationTapEvent) => {
@@ -490,9 +636,9 @@ function App() {
     const catLower = (category || '').toLowerCase();
     const segLower = (segment || '').toLowerCase();
 
-    if (segLower === 'bookings' || catLower === 'services' || catLower === 'stay' || catLower === 'travel') {
+    if (segLower === 'bookings' || catLower === 'services' || catLower === 'stay' || catLower === 'travel' || catLower === 'booking') {
       handleNavigate('Orders', { segment: 'Bookings', targetId });
-    } else if (segLower === 'jobs' || catLower === 'jobs') {
+    } else if (segLower === 'jobs' || catLower === 'jobs' || catLower === 'job') {
       handleNavigate('Orders', { segment: 'Jobs', targetId });
     } else if (segLower === 'business' || catLower === 'payments') {
       handleNavigate('Payments');
@@ -501,22 +647,123 @@ function App() {
     }
   };
 
-  // Listen for system notification clicks (cold start & runtime)
+  // Listen for system notification clicks & FCM pushes across all states
   useEffect(() => {
+    // 1. Native System Tray Notification Tap (Cold Start)
     soundNotificationService.getInitialNotification().then((data) => {
       if (data) {
         routeNotificationTap(data);
       }
     });
 
-    const unsubscribe = soundNotificationService.onNotificationTapped((data) => {
+    // 2. Native System Tray Notification Tap (Runtime)
+    const unsubscribeNativeTap = soundNotificationService.onNotificationTapped((data) => {
       routeNotificationTap(data);
     });
 
+    // 3. FCM Foreground Message Listener
+    let unsubscribeFcmForeground: (() => void) | null = null;
+    if (messagingModule) {
+      try {
+        unsubscribeFcmForeground = messagingModule().onMessage(async (remoteMessage: any) => {
+          console.log('📥 [App] Foreground FCM Push Message:', remoteMessage);
+          if (remoteMessage) {
+            const title =
+              remoteMessage.notification?.title ||
+              remoteMessage.data?.title ||
+              'New Transaction';
+
+            const message =
+              remoteMessage.notification?.body ||
+              remoteMessage.data?.message ||
+              remoteMessage.data?.body ||
+              'New update received';
+
+            const targetId =
+              remoteMessage.data?.targetId ||
+              remoteMessage.data?.orderId ||
+              remoteMessage.data?.id ||
+              '';
+
+            const category =
+              remoteMessage.data?.category ||
+              remoteMessage.data?.type ||
+              'Orders';
+
+            const segment =
+              remoteMessage.data?.segment ||
+              (category.toLowerCase().includes('job') ? 'Jobs' :
+               (category.toLowerCase().includes('service') || category.toLowerCase().includes('stay') || category.toLowerCase().includes('travel') || category.toLowerCase().includes('booking') ? 'Bookings' : 'Orders'));
+
+            // Always trigger native system tray notification + audio alert
+            soundNotificationService.showSystemNotification({
+              title,
+              message,
+              targetId,
+              category,
+              segment,
+              playSound: true,
+            });
+
+            // Display in-app popup modal / banner
+            const resolvedSegment: 'Orders' | 'Bookings' | 'Jobs' =
+              segment === 'Bookings' ? 'Bookings' : (segment === 'Jobs' ? 'Jobs' : 'Orders');
+
+            const activityNotif: VendorActivityNotification = {
+              id: targetId || `FCM-${Date.now()}`,
+              category: resolvedSegment === 'Bookings' ? 'Booking' : (resolvedSegment === 'Jobs' ? 'Job' : 'Order'),
+              segment: resolvedSegment,
+              title,
+              description: message,
+              itemName: remoteMessage.data?.itemName || message,
+              customerName: remoteMessage.data?.customerName || 'Customer',
+              amount: remoteMessage.data?.amount ? String(remoteMessage.data.amount) : undefined,
+              status: remoteMessage.data?.status || 'Confirmed',
+              dateTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              receivedAt: Date.now(),
+              raw: remoteMessage.data,
+            };
+            setActiveNotification(activityNotif);
+            enqueueOrDisplayModalNotification(activityNotif);
+          }
+        });
+      } catch (e) {}
+
+      // 4. FCM Background Tap Listener
+      let unsubscribeFcmOpened: (() => void) | null = null;
+      try {
+        unsubscribeFcmOpened = messagingModule().onNotificationOpenedApp((remoteMessage: any) => {
+          console.log('👆 [App] FCM Background Tap:', remoteMessage);
+          if (remoteMessage?.data) {
+            routeNotificationTap({
+              targetId: remoteMessage.data.targetId || remoteMessage.data.orderId || '',
+              category: remoteMessage.data.category || 'Orders',
+              segment: remoteMessage.data.segment || 'Orders',
+            });
+          }
+        });
+      } catch (e) {}
+
+      // 5. FCM Terminated / Cold Start Tap Listener
+      try {
+        messagingModule().getInitialNotification().then((remoteMessage: any) => {
+          if (remoteMessage?.data) {
+            console.log('🚀 [App] FCM Terminated Cold-Start Tap:', remoteMessage);
+            routeNotificationTap({
+              targetId: remoteMessage.data.targetId || remoteMessage.data.orderId || '',
+              category: remoteMessage.data.category || 'Orders',
+              segment: remoteMessage.data.segment || 'Orders',
+            });
+          }
+        });
+      } catch (e) {}
+    }
+
     return () => {
-      unsubscribe();
+      unsubscribeNativeTap();
+      if (unsubscribeFcmForeground) unsubscribeFcmForeground();
     };
-  }, []);
+  }, [enqueueOrDisplayModalNotification]);
 
   // Global Real-Time Activity Notification Listener
   useEffect(() => {
@@ -526,8 +773,9 @@ function App() {
       const unsubscribe = socketService.onNotificationReceived((notif) => {
         console.log('📢 [App.tsx] Received notification:', notif?.id, notif?.category, notif?.title);
         setActiveNotification(notif);
-        // Only pop up in-app modal if app is actively in foreground; background displays system tray notification
-        if (AppState.currentState === 'active') {
+        // Display modal popup when app is in foreground or transitioning
+        const curState = AppState.currentState;
+        if (curState === 'active' || curState === 'unknown' || !curState) {
           enqueueOrDisplayModalNotification(notif);
         }
       });
@@ -639,14 +887,14 @@ function App() {
         {visitedTabs.has('Payments') && (
           <View style={[tw`flex-1`, activeTab === 'Payments' ? tw`flex` : tw`hidden`]}>
             <ScreenErrorBoundary screenName="Payments" onReset={() => setActiveTab('Home')}>
-              <VendorPaymentsScreen onNavigate={handleNavigate} isDark={isDark} />
+              <VendorPaymentsScreen onNavigate={handleNavigate} onBack={handleBack} isDark={isDark} />
             </ScreenErrorBoundary>
           </View>
         )}
 
         {/* Analytics Trends Screen */}
-        {activeTab === 'Analytics' && (
-          <View style={tw`flex-1`}>
+        {visitedTabs.has('Analytics') && (
+          <View style={[tw`flex-1`, activeTab === 'Analytics' ? tw`flex` : tw`hidden`]}>
             <ScreenErrorBoundary screenName="Analytics" onReset={() => setActiveTab('Home')}>
               <PaymentsScreen isDark={isDark} />
             </ScreenErrorBoundary>
@@ -671,55 +919,55 @@ function App() {
         )}
 
         {/* Delivery Partners Screen */}
-        {activeTab === 'DeliveryPartners' && (
-          <View style={tw`flex-1`}>
+        {visitedTabs.has('DeliveryPartners') && (
+          <View style={[tw`flex-1`, activeTab === 'DeliveryPartners' ? tw`flex` : tw`hidden`]}>
             <ScreenErrorBoundary screenName="DeliveryPartners" onReset={() => setActiveTab('Home')}>
-              <DeliveryPartnersScreen onNavigate={handleNavigate} isDark={isDark} />
+              <DeliveryPartnersScreen onNavigate={handleNavigate} onBack={handleBack} isDark={isDark} />
             </ScreenErrorBoundary>
           </View>
         )}
 
         {/* Customers Screen */}
-        {activeTab === 'Customers' && (
-          <View style={tw`flex-1`}>
+        {visitedTabs.has('Customers') && (
+          <View style={[tw`flex-1`, activeTab === 'Customers' ? tw`flex` : tw`hidden`]}>
             <ScreenErrorBoundary screenName="Customers" onReset={() => setActiveTab('Home')}>
-              <CustomersScreen onNavigate={handleNavigate} isDark={isDark} />
+              <CustomersScreen onNavigate={handleNavigate} onBack={handleBack} isDark={isDark} />
             </ScreenErrorBoundary>
           </View>
         )}
 
         {/* Subscriptions Screen */}
-        {activeTab === 'Subscriptions' && (
-          <View style={tw`flex-1`}>
+        {visitedTabs.has('Subscriptions') && (
+          <View style={[tw`flex-1`, activeTab === 'Subscriptions' ? tw`flex` : tw`hidden`]}>
             <ScreenErrorBoundary screenName="Subscriptions" onReset={() => setActiveTab('Profile')}>
-              <SubscriptionScreen onNavigate={handleNavigate} isDark={isDark} />
+              <SubscriptionScreen onNavigate={handleNavigate} onBack={handleBack} isDark={isDark} />
             </ScreenErrorBoundary>
           </View>
         )}
 
         {/* Vendor Payments / Payouts Screen */}
-        {activeTab === 'VendorPayments' && (
-          <View style={tw`flex-1`}>
+        {visitedTabs.has('VendorPayments') && (
+          <View style={[tw`flex-1`, activeTab === 'VendorPayments' ? tw`flex` : tw`hidden`]}>
             <ScreenErrorBoundary screenName="VendorPayments" onReset={() => setActiveTab('Profile')}>
-              <VendorPaymentsScreen onNavigate={handleNavigate} isDark={isDark} />
+              <VendorPaymentsScreen onNavigate={handleNavigate} onBack={handleBack} isDark={isDark} />
             </ScreenErrorBoundary>
           </View>
         )}
 
         {/* Support Queries Screen */}
-        {activeTab === 'Queries' && (
-          <View style={tw`flex-1`}>
+        {visitedTabs.has('Queries') && (
+          <View style={[tw`flex-1`, activeTab === 'Queries' ? tw`flex` : tw`hidden`]}>
             <ScreenErrorBoundary screenName="Queries" onReset={() => setActiveTab('Profile')}>
-              <QueriesScreen onNavigate={handleNavigate} isDark={isDark} />
+              <QueriesScreen onNavigate={handleNavigate} onBack={handleBack} isDark={isDark} />
             </ScreenErrorBoundary>
           </View>
         )}
 
         {/* Notification History Screen */}
-        {activeTab === 'NotificationHistory' && (
-          <View style={tw`flex-1`}>
+        {visitedTabs.has('NotificationHistory') && (
+          <View style={[tw`flex-1`, activeTab === 'NotificationHistory' ? tw`flex` : tw`hidden`]}>
             <ScreenErrorBoundary screenName="NotificationHistory" onReset={() => setActiveTab('Home')}>
-              <NotificationHistoryScreen onNavigate={handleNavigate} isDark={isDark} />
+              <NotificationHistoryScreen onNavigate={handleNavigate} onBack={handleBack} isDark={isDark} />
             </ScreenErrorBoundary>
           </View>
         )}
@@ -872,7 +1120,6 @@ function App() {
               onClose={dismissCurrentModal}
               isProcessing={isOrderActionProcessing}
               isDark={isDark}
-              remainingSeconds={modalRemainingSeconds}
               queueCount={modalQueueRef.current.length}
             />
           </View>

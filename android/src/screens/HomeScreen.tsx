@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { fetchAnalytics, getVendorUser, fetchProfile, fetchOrders, fetchBookings, updateOrderStatus, fetchCustomers, CustomerItem, addLocalOrder, normalizeCategory, fetchVendorRatings } from '../services/apiService';
+import { fetchAnalytics, getVendorUser, fetchProfile, fetchOrders, fetchBookings, updateOrderStatus, fetchCustomers, CustomerItem, addLocalOrder, normalizeCategory, fetchVendorRatings, fetchAllBusinessesProducts } from '../services/apiService';
 import { sessionManager } from '../services/sessionManager';
 import { socketService } from '../services/socketService';
 import { soundNotificationService } from '../services/soundNotificationService';
@@ -708,21 +708,81 @@ export default function HomeScreen({
     );
   };
 
-  const safeItems = Array.isArray(items) ? items.filter(Boolean) : [];
+  const [localItems, setLocalItems] = useState<any[]>(items || []);
+
+  useEffect(() => {
+    if (Array.isArray(items) && items.length > 0) {
+      setLocalItems(items);
+    }
+  }, [items]);
+
+  useEffect(() => {
+    let isMounted = true;
+    const fetchCatalog = async () => {
+      try {
+        const vendorId = activeUser?._id || activeUser?.id || 'default';
+        const cached = await sessionManager.getVendorCache(vendorId, 'catalog_items');
+        if (isMounted && Array.isArray(cached) && cached.length > 0) {
+          setLocalItems(cached);
+        }
+        const fetched = await fetchAllBusinessesProducts();
+        if (isMounted && Array.isArray(fetched) && fetched.length > 0) {
+          setLocalItems(fetched);
+          sessionManager.saveVendorCache(vendorId, 'catalog_items', fetched);
+        }
+      } catch (err) {
+        console.warn('[HomeScreen] Catalog fetch error:', err);
+      }
+    };
+    if (!items || items.length === 0) {
+      fetchCatalog();
+    }
+    return () => {
+      isMounted = false;
+    };
+  }, [activeUser]);
+
+  const safeItems = (Array.isArray(localItems) && localItems.length > 0 ? localItems : (Array.isArray(items) ? items : [])).filter(Boolean);
 
   const activeCategories = baseCategories
     .map(cat => {
-      const count = safeItems.filter(item => item && item.category === cat.key).length;
-      const hasBusiness = activeUser?.businesses && Array.isArray(activeUser.businesses) && activeUser.businesses.length > 0
-        ? activeUser.businesses.some((biz: any) => {
-            const normType = normalizeCategory(biz?.vendorType);
-            const normCat = normalizeCategory(biz?.category);
-            const normBase = normalizeCategory(biz?.baseVendorType);
-            return normType === cat.key || normCat === cat.key || normBase === cat.key;
-          })
+      const matchingBusinesses = (activeUser?.businesses || []).filter((b: any) => {
+        const normType = normalizeCategory(b?.vendorType);
+        const normCat = normalizeCategory(b?.category);
+        const normBase = normalizeCategory(b?.baseVendorType);
+        return normType === cat.key || normCat === cat.key || normBase === cat.key;
+      });
+
+      const matchingBizIds = new Set(
+        matchingBusinesses.map((b: any) => String(b._id || b.id)).filter(Boolean)
+      );
+
+      const count = safeItems.filter(item => {
+        if (!item) return false;
+        const itCatNorm = normalizeCategory(item.category || item.type || item.vendorType);
+        const itBizId = String(item.businessId || '');
+        const itVendorId = String(item.vendorId || '');
+
+        // Match 1: businessId or vendorId matches outlet ID
+        if (itBizId && matchingBizIds.has(itBizId)) return true;
+        if (itVendorId && matchingBizIds.has(itVendorId)) return true;
+
+        // Match 2: Category normalized match
+        if (itCatNorm === cat.key) {
+          // If no specific businessId on item, or matches user id
+          if (!itBizId || itBizId === String(activeUser?._id || '') || itVendorId === String(activeUser?._id || '')) {
+            return true;
+          }
+        }
+        return false;
+      }).length;
+
+      const hasBusiness = matchingBusinesses.length > 0
+        ? true
         : (activeUser?.vendorType || activeUser?.category)
             ? normalizeCategory(activeUser?.vendorType || activeUser?.category) === cat.key
             : false;
+
       return {
         ...cat,
         count: `${count} ${cat.unit}${count !== 1 ? 's' : ''}`,

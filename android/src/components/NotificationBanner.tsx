@@ -31,6 +31,10 @@ export interface VendorActivityNotification {
   amount?: string;
   dateTime: string;
   status: string;
+  previousStatus?: string;
+  newStatus?: string;
+  description?: string;
+  isStatusUpdate?: boolean;
   segment: 'Orders' | 'Bookings' | 'Jobs';
   raw?: any;
   receivedAt: number;
@@ -41,7 +45,7 @@ interface NotificationBannerProps {
   onPress: (notification: VendorActivityNotification) => void;
   onDismiss: () => void;
   isDark?: boolean;
-  autoDismissDuration?: number; // ms, default 8000
+  autoDismissDuration?: number; // ms, default 15000 (15 seconds)
 }
 
 export default function NotificationBanner({
@@ -49,7 +53,7 @@ export default function NotificationBanner({
   onPress,
   onDismiss,
   isDark = false,
-  autoDismissDuration = 8000,
+  autoDismissDuration = 15000,
 }: NotificationBannerProps) {
   const insets = useSafeAreaInsets();
   const slideAnim = useRef(new Animated.Value(0)).current;
@@ -277,17 +281,34 @@ export default function NotificationBanner({
               <View
                 style={[
                   tw`px-1.5 py-0.2 rounded border`,
-                  isDark ? tw`bg-zinc-800 border-zinc-700` : tw`bg-gray-100 border-gray-200`,
+                  notification.previousStatus && (notification.newStatus || notification.status) && notification.previousStatus !== (notification.newStatus || notification.status)
+                    ? (isDark ? tw`bg-amber-950/40 border-amber-800/60` : tw`bg-amber-50 border-amber-200`)
+                    : (isDark ? tw`bg-zinc-800 border-zinc-700` : tw`bg-gray-100 border-gray-200`),
                 ]}>
                 <Text
                   style={[
                     tw`text-[9px] font-semibold`,
-                    isDark ? tw`text-zinc-300` : tw`text-gray-600`,
+                    notification.previousStatus && (notification.newStatus || notification.status) && notification.previousStatus !== (notification.newStatus || notification.status)
+                      ? (isDark ? tw`text-amber-300` : tw`text-amber-800`)
+                      : (isDark ? tw`text-zinc-300` : tw`text-gray-600`),
                   ]}>
-                  {notification.status}
+                  {notification.previousStatus && (notification.newStatus || notification.status) && notification.previousStatus !== (notification.newStatus || notification.status)
+                    ? `${notification.previousStatus} → ${notification.newStatus || notification.status}`
+                    : notification.status}
                 </Text>
               </View>
             </View>
+
+            {notification.description ? (
+              <Text
+                style={[
+                  tw`text-[11px] mt-1 font-medium italic`,
+                  isDark ? tw`text-zinc-400` : tw`text-gray-600`,
+                ]}
+                numberOfLines={1}>
+                {notification.description}
+              </Text>
+            ) : null}
           </View>
 
           {/* Right Action Arrow */}

@@ -528,6 +528,8 @@ export const mapApiProductToBusinessItem = (product: any, categoryFallback: Cate
 
   return {
     id: product._id || product.id,
+    businessId: String(product.businessId || product.vendorId || product.vendor_id || ''),
+    vendorId: String(product.vendorId || product.vendor_id || product.businessId || ''),
     name: product.name,
     detail: product.jobDescription || product.description || product.detail || '',
     price: displayPrice,
@@ -654,6 +656,7 @@ export const mapBusinessItemToApiProduct = (item: Partial<BusinessItem>, vendorU
         : '');
 
   return {
+    ...(item.businessId || item.vendorId ? { businessId: item.businessId || item.vendorId, vendorId: item.vendorId || item.businessId } : {}),
     name: item.name,
     description: item.jobDescription || item.detail,
     detail: item.jobDescription || item.detail,
@@ -782,12 +785,46 @@ export const loginVendor = async (email: string, password: string, rememberMe: b
     body: JSON.stringify({ email, password }),
   });
   if (data && data.success && data.user) {
-    setToken(data.token);
-    setVendorUser(data.user);
-    try {
-      await sessionManager.saveSession(data.token, data.user, rememberMe);
-    } catch (e) {
-      console.warn('[loginVendor] Failed to persist session:', e);
+    const u = data.user;
+    const statusLower = String(u.status || u.approvalStatus || '').toLowerCase();
+    const isPending = Boolean(
+      data.isPendingApproval ||
+      u.isApproved === false ||
+      [
+        'pending',
+        'submitted',
+        'pending_pincode_approval',
+        'pincode_approved',
+        'kyc_pending',
+        'kyc_in_progress',
+        'payment_pending',
+        'pincode_rejected',
+        'kyc_rejected',
+        'pending pincode admin review',
+      ].includes(statusLower) ||
+      ['pending_pincode_approval', 'pending_kyc_approval', 'pending_payment_approval'].includes(String(u.approvalStatus || '').toLowerCase())
+    );
+    const isSuspended = Boolean(
+      u.isSuspended ||
+      u.isLocked ||
+      ['suspended', 'inactive', 'terminated'].includes(statusLower) ||
+      String(u.approvalStatus || '').toLowerCase() === 'suspended'
+    );
+    const isRejected = Boolean(
+      data.isRejected ||
+      u.isRejected ||
+      ['rejected', 'cancelled'].includes(statusLower) ||
+      String(u.approvalStatus || '').toLowerCase() === 'rejected'
+    );
+
+    if (!isPending && !isSuspended && !isRejected) {
+      setToken(data.token);
+      setVendorUser(data.user);
+      try {
+        await sessionManager.saveSession(data.token, data.user, rememberMe);
+      } catch (e) {
+        console.warn('[loginVendor] Failed to persist session:', e);
+      }
     }
   }
   return data;
@@ -894,7 +931,7 @@ export const fetchAllBusinessesProducts = async (): Promise<BusinessItem[]> => {
       if (data && data.data && Array.isArray(data.data)) {
         appendItems(
           data.data.map((prod: any) =>
-            mapApiProductToBusinessItem(prod, prod.vendorType || prod.category || 'Products')
+            mapApiProductToBusinessItem(prod, prod.mainCategory || prod.category || prod.vendorType || 'Products')
           )
         );
       }
@@ -917,7 +954,7 @@ export const fetchAllBusinessesProducts = async (): Promise<BusinessItem[]> => {
               const bizCat = normalizeCategory(biz.vendorType || biz.category || biz.baseVendorType);
               appendItems(
                 res.data.map((prod: any) =>
-                  mapApiProductToBusinessItem(prod, prod.vendorType || prod.category || bizCat)
+                  mapApiProductToBusinessItem(prod, prod.mainCategory || prod.category || prod.vendorType || bizCat)
                 )
               );
             }
@@ -1134,6 +1171,52 @@ export const fetchApplications = async () => {
     return data.data;
   }
   return [];
+};
+
+export const fetchVendorNotifications = async (): Promise<any[]> => {
+  try {
+    const data = await apiRequest('/vendor/notifications', {
+      method: 'GET',
+    });
+    if (data && Array.isArray(data.data)) {
+      return data.data;
+    }
+    if (data && Array.isArray(data.notifications)) {
+      return data.notifications;
+    }
+  } catch (e) {}
+  return [];
+};
+
+export const markVendorNotificationReadApi = async (id?: string) => {
+  try {
+    const endpoint = id ? `/vendor/notifications/${id}/read` : '/vendor/notifications/read-all';
+    await apiRequest(endpoint, {
+      method: 'PUT',
+    });
+  } catch (e) {}
+};
+
+export const registerDeviceToken = async (fcmToken: string): Promise<boolean> => {
+  if (!fcmToken) return false;
+  try {
+    const user = getVendorUser();
+    const userId = user?.vendorId || user?._id || user?.id || user?.registrationId || 'vendor';
+    const res = await apiRequest('/notifications/register-token', {
+      method: 'POST',
+      body: JSON.stringify({
+        token: fcmToken,
+        platform: Platform.OS,
+        deviceId: `android_${userId}`,
+        userId,
+      }),
+    });
+    console.log('[apiService] FCM Device token registered with backend:', res);
+    return true;
+  } catch (err: any) {
+    console.warn('[apiService] registerDeviceToken warning:', err?.message || err);
+    return false;
+  }
 };
 
 export const updateOrderStatus = async (

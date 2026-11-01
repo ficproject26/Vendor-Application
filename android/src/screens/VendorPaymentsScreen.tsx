@@ -29,18 +29,25 @@ import {
 import {
   fetchSalesPayments,
   fetchVendorSettlements,
+  getVendorUser,
 } from '../services/apiService';
+import sessionManager from '../services/sessionManager';
 
 interface VendorPaymentsScreenProps {
   onNavigate?: (tab: any) => void;
+  onBack?: () => void;
   isDark?: boolean;
 }
 
 export default function VendorPaymentsScreen({
   onNavigate,
+  onBack,
   isDark = false,
 }: VendorPaymentsScreenProps) {
   const insets = useSafeAreaInsets();
+  const currentUser = getVendorUser();
+  const vendorId = currentUser?._id || currentUser?.id || 'default';
+
   const [activeTab, setActiveTab] = useState<'sales' | 'settlements'>('sales');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -63,30 +70,46 @@ export default function VendorPaymentsScreen({
         fetchVendorSettlements().catch(() => null),
       ]);
 
+      let updatedSales = salesPayments;
+      let updatedSalesSummary = salesSummary;
+      let updatedSettlements = settlements;
+      let updatedSettlementsSummary = settlementsSummary;
+
       if (salesRes && salesRes.success) {
         const rawSales = salesRes.data || salesRes.payments || [];
-        setSalesPayments(Array.isArray(rawSales) ? rawSales : []);
+        updatedSales = Array.isArray(rawSales) ? rawSales : [];
+        setSalesPayments(updatedSales);
         if (salesRes.summary) {
-          setSalesSummary({
+          updatedSalesSummary = {
             totalAmount: salesRes.summary.totalSales !== undefined ? salesRes.summary.totalSales : (salesRes.summary.totalAmount || 0),
             count: salesRes.summary.count !== undefined ? salesRes.summary.count : rawSales.length,
             totalCommission: salesRes.summary.totalCommission || 0,
             totalVendorReceived: salesRes.summary.totalVendorReceived || 0,
-          });
+          };
+          setSalesSummary(updatedSalesSummary);
         }
       }
 
       if (settRes && settRes.success) {
         const rawSettlements = settRes.data || settRes.settlements || [];
-        setSettlements(Array.isArray(rawSettlements) ? rawSettlements : []);
+        updatedSettlements = Array.isArray(rawSettlements) ? rawSettlements : [];
+        setSettlements(updatedSettlements);
         if (settRes.summary) {
-          setSettlementsSummary({
+          updatedSettlementsSummary = {
             totalSettled: settRes.summary.totalReceived !== undefined ? settRes.summary.totalReceived : (settRes.summary.totalSettled || 0),
             totalCommission: settRes.summary.totalCommissionDeducted !== undefined ? settRes.summary.totalCommissionDeducted : (settRes.summary.totalCommission || 0),
             pendingSettlement: settRes.summary.pendingSettlement || 0,
-          });
+          };
+          setSettlementsSummary(updatedSettlementsSummary);
         }
       }
+
+      sessionManager.saveVendorCache(vendorId, 'vendor_payments', {
+        salesPayments: updatedSales,
+        salesSummary: updatedSalesSummary,
+        settlements: updatedSettlements,
+        settlementsSummary: updatedSettlementsSummary,
+      });
     } catch (err) {
       console.warn('[VendorPaymentsScreen] Error loading payment records:', err);
     } finally {
@@ -96,6 +119,18 @@ export default function VendorPaymentsScreen({
   };
 
   useEffect(() => {
+    // 1. Instant Cache Hydration (<10ms)
+    sessionManager.getVendorCache(vendorId, 'vendor_payments').then(cached => {
+      if (cached) {
+        if (cached.salesPayments) setSalesPayments(cached.salesPayments);
+        if (cached.salesSummary) setSalesSummary(cached.salesSummary);
+        if (cached.settlements) setSettlements(cached.settlements);
+        if (cached.settlementsSummary) setSettlementsSummary(cached.settlementsSummary);
+        setLoading(false);
+      }
+    });
+
+    // 2. Background Revalidation
     loadData();
   }, []);
 
@@ -137,7 +172,7 @@ export default function VendorPaymentsScreen({
         ]}>
         <View style={tw`flex-row items-center`}>
           <TouchableOpacity
-            onPress={() => onNavigate?.('Profile')}
+            onPress={() => onBack ? onBack() : onNavigate?.('Profile')}
             activeOpacity={0.7}
             style={[
               tw`w-10 h-10 rounded-full items-center justify-center mr-3`,

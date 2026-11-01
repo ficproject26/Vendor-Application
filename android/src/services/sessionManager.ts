@@ -212,6 +212,39 @@ class SessionManager {
   }
 
   /**
+   * Persist notification into vendor notification history
+   */
+  async saveNotificationToHistory(vendorId: string, notif: any): Promise<void> {
+    try {
+      const existing = (await this.getVendorCache(vendorId, 'notification_history', 7 * 86400000)) || [];
+      const notifId = String(notif.id || notif._id || notif.order_number || Date.now());
+      const filtered = existing.filter((item: any) => String(item.id || item._id || item.order_number) !== notifId);
+      const updated = [notif, ...filtered].slice(0, 50); // Keep latest 50 notifications
+      await this.saveVendorCache(vendorId, 'notification_history', updated);
+    } catch {}
+  }
+
+  /**
+   * Retrieve persistent notification history for vendor
+   */
+  async getNotificationHistory(vendorId: string): Promise<any[]> {
+    try {
+      return (await this.getVendorCache(vendorId, 'notification_history', 7 * 86400000)) || [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Clear notification history
+   */
+  async clearNotificationHistory(vendorId: string): Promise<void> {
+    try {
+      await this.saveVendorCache(vendorId, 'notification_history', []);
+    } catch {}
+  }
+
+  /**
    * Persist user selected theme mode ('light' | 'dark' | 'system')
    */
   async saveThemePreference(theme: string): Promise<void> {
