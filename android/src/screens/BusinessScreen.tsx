@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { launchCamera, launchImageLibrary } from 'react-native-image-picker';
-import { getVendorUser, setVendorUser, fetchProfile, fetchProducts, createProduct, updateProduct, deleteProduct, createBusiness, getActiveBusinessId, setActiveBusinessId, fetchAllBusinessesProducts, updateProfile, uploadImageToServer, normalizeCategory, fetchCategoryHierarchy, fetchMainCategories, applyListingOffer, removeListingOffer } from '../services/apiService';
+import { getVendorUser, setVendorUser, fetchProfile, fetchProducts, createProduct, updateProduct, deleteProduct, createBusiness, getActiveBusinessId, setActiveBusinessId, fetchAllBusinessesProducts, updateProfile, uploadImageToServer, normalizeCategory, fetchCategoryHierarchy, fetchMainCategories, applyListingOffer, removeListingOffer, formatImageUrl } from '../services/apiService';
 import {
   View,
   Text,
@@ -681,7 +681,8 @@ export default function BusinessScreen({
     count: safeItems.filter(i => {
       if (!i) return false;
       if (cat.key === 'Jobs') return isJobItem(i);
-      return i.category === cat.key && !isJobItem(i);
+      const iCat = normalizeCategory(i.category || (i as any).mainCategory || '');
+      return iCat === cat.key && !isJobItem(i);
     }).length,
   }));
 
@@ -689,7 +690,8 @@ export default function BusinessScreen({
     .filter(i => {
       if (!i) return false;
       if (activeCategory === 'Jobs') return isJobItem(i);
-      return (i.category === activeCategory || (i as any).mainCategory === activeCategory) && !isJobItem(i);
+      const iCat = normalizeCategory(i.category || (i as any).mainCategory || '');
+      return iCat === activeCategory && !isJobItem(i);
     })
     .filter(i => {
       if (!searchQuery) return true;
@@ -2251,7 +2253,7 @@ export default function BusinessScreen({
                     {/* Product/Service Image (Hidden for Jobs) */}
                     {!(item.category === 'Jobs' || selectedCategory === 'Jobs') && (
                       <Image
-                        source={{ uri: item.image || categoryImages[item.category as CategoryKey] || categoryImages['Products'] }}
+                        source={{ uri: formatImageUrl(item.image) || categoryImages[item.category as CategoryKey] || categoryImages['Products'] }}
                         style={[tw`w-22 h-22 rounded-2xl mr-4 border`, isDark ? tw`bg-zinc-800 border-zinc-700` : tw`bg-gray-100 border-gray-200`]}
                         resizeMode="cover"
                       />

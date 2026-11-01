@@ -1,6 +1,7 @@
 import React, {useState, useEffect, useMemo} from 'react';
-import { fetchOrders, fetchBookings, fetchApplications, updateOrderStatus, getVendorUser } from '../services/apiService';
+import { fetchOrders, fetchBookings, fetchApplications, updateOrderStatus, getVendorUser, formatImageUrl } from '../services/apiService';
 import { socketService } from '../services/socketService';
+import { sessionManager } from '../services/sessionManager';
 import {
   View,
   Text,
@@ -58,6 +59,135 @@ const getCustomerDisplayId = (item: any): string => {
 
 type OrderStatus = 'All' | 'Pending' | 'Preparing' | 'Assigned' | 'Delivered' | 'Cancelled';
 
+export interface BookingCategoryInfo {
+  category: 'Services' | 'Stay' | 'Travel' | 'Unknown';
+  badgeLabel: 'SERVICE BOOKING' | 'STAY BOOKING' | 'TRAVEL BOOKING' | 'BOOKING';
+  textColor: string;
+  bgColor: string;
+  darkBgColor: string;
+  darkTextColor: string;
+  borderColor: string;
+  iconName: 'CalendarCheck' | 'Compass';
+}
+
+export const resolveBookingCategoryInfo = (o: any): BookingCategoryInfo => {
+  if (!o) {
+    return {
+      category: 'Unknown',
+      badgeLabel: 'BOOKING',
+      textColor: '#4B5563',
+      bgColor: '#F3F4F6',
+      darkBgColor: '#27272A',
+      darkTextColor: '#A1A1AA',
+      borderColor: '#E5E7EB',
+      iconName: 'CalendarCheck',
+    };
+  }
+
+  const raw = o.rawOrder || o;
+  const firstItem = (raw.items && Array.isArray(raw.items) && raw.items[0]) || {};
+
+  // 1. Authoritative category from booking record or first item
+  const rawCat = String(raw.category || '').trim().toLowerCase();
+  const rawType = String(raw.type || '').trim().toLowerCase();
+  const itemMainCat = String(firstItem.mainCategory || '').trim().toLowerCase();
+  const itemCat = String(firstItem.category || '').trim().toLowerCase();
+  const detailStr = String(raw.product_details || firstItem.name || '').toLowerCase();
+  const rawServiceName = String(raw.serviceName || '').toLowerCase();
+
+  // Explicit Stay check (strictly from category/type taxonomy, never inferring from checkInDate)
+  const isStayTaxonomy =
+    ['stay', 'hotel', 'hotels', 'resort', 'resorts', 'rooms', 'room'].includes(rawCat) ||
+    ['stay', 'hotel', 'hotels', 'resort', 'resorts', 'rooms', 'room'].includes(rawType) ||
+    ['stay', 'hotel', 'hotels', 'resort', 'resorts'].includes(itemMainCat) ||
+    ['hotels', 'resorts', 'rooms', 'luxury', 'hill station', 'cottages', 'villas', 'resort', 'hotel', 'homestay', 'pg', 'stay'].includes(itemCat);
+
+  // Explicit Travel check
+  const isBus = Boolean(raw.isBusBooking || raw.bus_name || raw.busId);
+  const isTravelTaxonomy =
+    ['travel', 'travels', 'package', 'packages', 'transport'].includes(rawCat) ||
+    ['travel', 'travels', 'package', 'packages', 'transport', 'bus', 'vehicle', 'cab', 'car', 'bike'].includes(rawType) ||
+    ['travel', 'travels'].includes(itemMainCat) ||
+    ['car', 'bus', 'bike', 'mini superbikes', 'ac car', 'non ac car', 'ac bus', 'non ac bus', 'superbikes', 'travel', 'travels', 'package'].includes(itemCat) ||
+    isBus;
+
+  // Explicit Services check
+  const isServicesTaxonomy =
+    ['services', 'service', 'home services'].includes(rawCat) ||
+    ['services', 'service', 'home services', 'appointment', 'hospital', 'technician', 'clinic'].includes(rawType) ||
+    ['services', 'service'].includes(itemMainCat) ||
+    ['it & device support', 'ac service', 'laptop repairs', 'cctv installation', 'pc repairs', 'full clean', 'cleaning', 'electrician', 'plumber', 'hospital', 'technician', 'healthcare'].includes(itemCat);
+
+  // Service keywords check on product details / service name
+  const isServiceKeyword = /\b(electrician|plumber|technician|solar|repair|repairs|cctv|cleaning|service|services|consultation|doctor|nurse|clinic|hospital)\b/i.test(detailStr) ||
+                           /\b(electrician|plumber|technician|solar|repair|repairs|cctv|cleaning|service|services|consultation|doctor|nurse|clinic|hospital)\b/i.test(rawServiceName);
+
+  // Travel keywords check on product details / service name
+  const isTravelKeyword = isBus || /\b(bus|flight|train|vehicle|travel|travels|tour|cab|taxi|superbike)\b/i.test(detailStr) ||
+                          /\b(bus|flight|train|vehicle|travel|travels|tour|cab|taxi|superbike)\b/i.test(rawServiceName);
+
+  // Stay keywords check on product details / property name
+  const rawPropName = String(raw.propertyName || raw.hotelName || '').toLowerCase();
+  const isStayKeyword = /\b(hotel|hotels|resort|resorts|villa|homestay|cottage|lodge|room|rooms|pg)\b/i.test(detailStr) ||
+                        /\b(hotel|hotels|resort|resorts|villa|homestay|cottage|lodge|room|rooms|pg)\b/i.test(rawPropName);
+
+  // Resolve with priority:
+  // 1. If explicitly a Service, or has service keywords and is not a genuine stay hotel/resort
+  if (isServicesTaxonomy || (isServiceKeyword && !isStayKeyword)) {
+    return {
+      category: 'Services',
+      badgeLabel: 'SERVICE BOOKING',
+      textColor: '#0F766E',
+      bgColor: '#F0FDFA',
+      darkBgColor: 'rgba(19, 78, 74, 0.6)',
+      darkTextColor: '#2DD4BF',
+      borderColor: '#CCFBF1',
+      iconName: 'CalendarCheck',
+    };
+  }
+
+  // 2. If explicitly Stay
+  if (isStayTaxonomy || (isStayKeyword && !isServiceKeyword && !isTravelKeyword)) {
+    return {
+      category: 'Stay',
+      badgeLabel: 'STAY BOOKING',
+      textColor: '#B45309',
+      bgColor: '#FFFBEB',
+      darkBgColor: 'rgba(69, 26, 3, 0.6)',
+      darkTextColor: '#FBBF24',
+      borderColor: '#FEF3C7',
+      iconName: 'CalendarCheck',
+    };
+  }
+
+  // 3. If explicitly Travel
+  if (isTravelTaxonomy || (isTravelKeyword && !isStayKeyword)) {
+    return {
+      category: 'Travel',
+      badgeLabel: 'TRAVEL BOOKING',
+      textColor: '#1D4ED8',
+      bgColor: '#EFF6FF',
+      darkBgColor: 'rgba(23, 37, 84, 0.6)',
+      darkTextColor: '#60A5FA',
+      borderColor: '#DBEAFE',
+      iconName: 'Compass',
+    };
+  }
+
+  // Fallback for unclassified / unknown categories:
+  console.warn('[BookingCategory] Unknown category for booking:', raw.order_number || raw.id, 'category:', raw.category, 'type:', raw.type);
+  return {
+    category: 'Unknown',
+    badgeLabel: 'BOOKING',
+    textColor: '#4B5563',
+    bgColor: '#F3F4F6',
+    darkBgColor: '#27272A',
+    darkTextColor: '#A1A1AA',
+    borderColor: '#E5E7EB',
+    iconName: 'CalendarCheck',
+  };
+};
+
 interface Booking {
   id: string;
   dbId?: string;
@@ -71,7 +201,10 @@ interface Booking {
   phone: string;
   customerAddress?: string;
   category?: string;
-  bookingCategory: 'Services' | 'Stay' | 'Travel';
+  bookingCategory: 'Services' | 'Stay' | 'Travel' | 'Unknown';
+  bookingBadgeLabel?: 'SERVICE BOOKING' | 'STAY BOOKING' | 'TRAVEL BOOKING' | 'BOOKING';
+  transactionType?: 'Booking';
+  badgeColors?: BookingCategoryInfo;
   // Stay fields
   propertyName?: string;
   roomName?: string;
@@ -145,7 +278,8 @@ interface Order {
   candidateExperience?: string;
   jobTitle?: string;
   jobId?: string;
-  category?: string;
+  category?: 'Products' | 'Food' | 'Daily Needs' | 'Jobs' | string;
+  transactionType?: 'Order' | 'Job Application';
   rawOrder?: any;
   isBusBooking?: boolean;
 }
@@ -302,6 +436,7 @@ export default function OrdersScreen({
   const [refreshing, setRefreshing] = useState(false);
 
   const vendorUser = getVendorUser();
+  const vendorId = (vendorUser?._id || vendorUser?.id || vendorUser?.vendorId || 'default').toString();
   const isJobVendor = vendorUser && vendorUser.vendorType && vendorUser.vendorType.startsWith('Job');
   const regularStatusFilters = ['All', 'Pending', 'Preparing', 'Assigned', 'Delivered', 'Cancelled'];
   const bookingStatusFilters = ['All', 'Confirmed', 'Pending', 'Completed', 'Cancelled'];
@@ -314,35 +449,108 @@ export default function OrdersScreen({
       ? bookingStatusFilters
       : regularStatusFilters;
 
+  // Hydrate from persistent disk cache immediately (< 10ms) & concurrently pre-fetch in background
+  useEffect(() => {
+    let isMounted = true;
+    Promise.all([
+      sessionManager.getVendorCache(vendorId, 'orders_raw'),
+      sessionManager.getVendorCache(vendorId, 'bookings_raw'),
+      sessionManager.getVendorCache(vendorId, 'jobs_raw'),
+    ]).then(([cOrders, cBookings, cJobs]) => {
+      if (!isMounted) return;
+      if (Array.isArray(cOrders) && cOrders.length > 0) setOrdersRaw(cOrders);
+      if (Array.isArray(cBookings) && cBookings.length > 0) setBookingsRaw(cBookings);
+      if (Array.isArray(cJobs) && cJobs.length > 0) setJobsRaw(cJobs);
+    }).catch(() => {});
+
+    // Concurrently pre-fetch all segments in parallel so tab switching is instantaneous
+    Promise.allSettled([
+      fetchOrders(),
+      fetchBookings(),
+      fetchApplications(),
+    ]).then(([ordRes, bkgRes, jobRes]) => {
+      if (!isMounted) return;
+      if (ordRes.status === 'fulfilled' && Array.isArray(ordRes.value)) {
+        setOrdersRaw(ordRes.value);
+        sessionManager.saveVendorCache(vendorId, 'orders_raw', ordRes.value);
+      }
+      if (bkgRes.status === 'fulfilled' && Array.isArray(bkgRes.value)) {
+        setBookingsRaw(bkgRes.value);
+        sessionManager.saveVendorCache(vendorId, 'bookings_raw', bkgRes.value);
+      }
+      if (jobRes.status === 'fulfilled' && Array.isArray(jobRes.value)) {
+        setJobsRaw(jobRes.value);
+        sessionManager.saveVendorCache(vendorId, 'jobs_raw', jobRes.value);
+      }
+    }).catch(() => {});
+
+    return () => {
+      isMounted = false;
+    };
+  }, [vendorId]);
+
   const loadSegmentData = async (segment = activeSegment, force = false) => {
     if (segment === 'Orders') {
-      if (!force && ordersRaw.length > 0) return;
+      if (!force && ordersRaw.length > 0) {
+        // Instant tab transition: data already present in memory/cache. Revalidate silently in background.
+        fetchOrders().then((data) => {
+          if (Array.isArray(data)) {
+            setOrdersRaw(data);
+            sessionManager.saveVendorCache(vendorId, 'orders_raw', data);
+          }
+        }).catch(() => {});
+        return;
+      }
       setLoadingOrders(true);
       try {
         const data = await fetchOrders();
-        setOrdersRaw(Array.isArray(data) ? data : []);
+        const list = Array.isArray(data) ? data : [];
+        setOrdersRaw(list);
+        sessionManager.saveVendorCache(vendorId, 'orders_raw', list);
       } catch (err: any) {
         console.warn("Failed to fetch orders:", err.message);
       } finally {
         setLoadingOrders(false);
       }
     } else if (segment === 'Bookings') {
-      if (!force && bookingsRaw.length > 0) return;
+      if (!force && bookingsRaw.length > 0) {
+        // Instant tab transition: data already present in memory/cache. Revalidate silently in background.
+        fetchBookings().then((data) => {
+          if (Array.isArray(data)) {
+            setBookingsRaw(data);
+            sessionManager.saveVendorCache(vendorId, 'bookings_raw', data);
+          }
+        }).catch(() => {});
+        return;
+      }
       setLoadingBookings(true);
       try {
         const data = await fetchBookings();
-        setBookingsRaw(Array.isArray(data) ? data : []);
+        const list = Array.isArray(data) ? data : [];
+        setBookingsRaw(list);
+        sessionManager.saveVendorCache(vendorId, 'bookings_raw', list);
       } catch (err: any) {
         console.warn("Failed to fetch bookings:", err.message);
       } finally {
         setLoadingBookings(false);
       }
     } else if (segment === 'Jobs') {
-      if (!force && jobsRaw.length > 0) return;
+      if (!force && jobsRaw.length > 0) {
+        // Instant tab transition: data already present in memory/cache. Revalidate silently in background.
+        fetchApplications().then((data) => {
+          if (Array.isArray(data)) {
+            setJobsRaw(data);
+            sessionManager.saveVendorCache(vendorId, 'jobs_raw', data);
+          }
+        }).catch(() => {});
+        return;
+      }
       setLoadingJobs(true);
       try {
         const data = await fetchApplications();
-        setJobsRaw(Array.isArray(data) ? data : []);
+        const list = Array.isArray(data) ? data : [];
+        setJobsRaw(list);
+        sessionManager.saveVendorCache(vendorId, 'jobs_raw', list);
       } catch (err: any) {
         console.warn("Failed to fetch jobs:", err.message);
       } finally {
@@ -356,13 +564,19 @@ export default function OrdersScreen({
     try {
       if (activeSegment === 'Orders') {
         const data = await fetchOrders();
-        setOrdersRaw(Array.isArray(data) ? data : []);
+        const list = Array.isArray(data) ? data : [];
+        setOrdersRaw(list);
+        sessionManager.saveVendorCache(vendorId, 'orders_raw', list);
       } else if (activeSegment === 'Bookings') {
         const data = await fetchBookings();
-        setBookingsRaw(Array.isArray(data) ? data : []);
+        const list = Array.isArray(data) ? data : [];
+        setBookingsRaw(list);
+        sessionManager.saveVendorCache(vendorId, 'bookings_raw', list);
       } else {
         const data = await fetchApplications();
-        setJobsRaw(Array.isArray(data) ? data : []);
+        const list = Array.isArray(data) ? data : [];
+        setJobsRaw(list);
+        sessionManager.saveVendorCache(vendorId, 'jobs_raw', list);
       }
     } catch (err: any) {
       console.warn("Refresh failed:", err.message);
@@ -401,7 +615,9 @@ export default function OrdersScreen({
         if (list.some(o => String(o._id || o.id || o.order_number) === targetId)) {
           return list;
         }
-        return [newOrder, ...list];
+        const updated = [newOrder, ...list];
+        sessionManager.saveVendorCache(vendorId, 'orders_raw', updated);
+        return updated;
       });
     });
 
@@ -415,7 +631,9 @@ export default function OrdersScreen({
         if (list.some(b => String(b._id || b.id || b.order_number) === targetId)) {
           return list;
         }
-        return [newBooking, ...list];
+        const updated = [newBooking, ...list];
+        sessionManager.saveVendorCache(vendorId, 'bookings_raw', updated);
+        return updated;
       });
     });
 
@@ -429,7 +647,9 @@ export default function OrdersScreen({
         if (list.some(j => String(j._id || j.id || j.order_number || j.applicationId) === targetId)) {
           return list;
         }
-        return [newJob, ...list];
+        const updated = [newJob, ...list];
+        sessionManager.saveVendorCache(vendorId, 'jobs_raw', updated);
+        return updated;
       });
     });
 
@@ -451,7 +671,13 @@ export default function OrdersScreen({
       setJobsRaw(prev => (Array.isArray(prev) ? prev : []).map(updateMatch));
     });
 
+    // Background polling fallback every 30 seconds to guarantee freshness if socket is silent
+    const pollInterval = setInterval(() => {
+      loadSegmentData(activeSegment, true);
+    }, 30000);
+
     return () => {
+      clearInterval(pollInterval);
       unsubOrder();
       unsubBooking();
       unsubJob();
@@ -477,16 +703,16 @@ export default function OrdersScreen({
   const isBusOrder = (o: any) => {
     if (!o) return false;
     const raw = o.rawOrder || o;
-    const cat = String(raw.category || '').toLowerCase();
+    const cat = String(raw.category || raw.type || '').toLowerCase();
     const pd = String(raw.product_details || raw.name || raw.serviceName || '').toLowerCase();
     return (
-      cat === 'travel' ||
       cat.includes('bus') ||
       Boolean(raw.bus_name) ||
+      Boolean(raw.busId) ||
       Boolean(raw.boarding_point) ||
       pd.includes('boarding:') ||
       pd.includes('dropping:') ||
-      Boolean(raw.travelers && raw.travelers.length > 0)
+      (cat === 'travel' && Boolean(raw.travelers && raw.travelers.length > 0 && raw.bus_name))
     );
   };
  
@@ -777,13 +1003,32 @@ export default function OrdersScreen({
     );
   };
 
+  // Helper to resolve canonical category for Orders (Products, Daily Needs, Food)
+  const resolveOrderCategory = (o: any): 'Products' | 'Daily Needs' | 'Food' => {
+    const raw = o.rawOrder || o;
+    const cat = String(raw.category || raw.type || raw.mainCategory || (raw.items && raw.items[0]?.category) || (raw.items && raw.items[0]?.mainCategory) || '').toLowerCase();
+    if (cat.includes('food') || cat.includes('restaurant') || cat.includes('dining') || cat.includes('cafe') || cat.includes('bakery')) {
+      return 'Food';
+    }
+    if (cat.includes('daily') || cat.includes('grocery') || cat.includes('groceries') || cat.includes('supermarket')) {
+      return 'Daily Needs';
+    }
+    return 'Products';
+  };
+
   // Helper to strictly identify Order category types (Products, Food, Daily Needs ONLY)
   const isProductFoodDailyOrder = (o: any) => {
     if (!o || isJobItem(o) || isBusOrder(o)) return false;
-    const cat = String(o.category || o.type || '').trim().toLowerCase();
-    if (['travel', 'stay', 'services', 'service', 'booking', 'appointment', 'hotel', 'hospital', 'doctor', 'technician'].includes(cat) || o.serviceName || o.appointment_slot || o.checkInDate || o.roomNumber) {
+    const bookingCatInfo = resolveBookingCategoryInfo(o);
+    if (bookingCatInfo && ['Services', 'Stay', 'Travel'].includes(bookingCatInfo.category)) {
       return false;
     }
+    const cat = String(o.category || o.type || '').trim().toLowerCase();
+    if (['travel', 'stay', 'services', 'service', 'booking', 'appointment', 'hotel', 'hospital', 'doctor', 'technician'].includes(cat) ||
+        o.serviceName || o.appointment_slot || o.checkInDate || o.checkOutDate || o.roomNumber || o.bus_name || o.travelers) {
+      return false;
+    }
+    if (o.transactionType === 'Booking') return false;
     return true;
   };
 
@@ -791,8 +1036,13 @@ export default function OrdersScreen({
   const isBookingItem = (o: any) => {
     if (!o || isJobItem(o)) return false;
     if (isBusOrder(o)) return true;
+    const bookingCatInfo = resolveBookingCategoryInfo(o);
+    if (bookingCatInfo && ['Services', 'Stay', 'Travel'].includes(bookingCatInfo.category)) {
+      return true;
+    }
     const cat = String(o.category || o.type || '').trim().toLowerCase();
-    return ['travel', 'stay', 'services', 'service', 'booking', 'appointment', 'hotel', 'hospital', 'doctor', 'technician'].includes(cat) || Boolean(o.serviceName) || Boolean(o.appointment_slot) || Boolean(o.checkInDate) || Boolean(o.roomNumber);
+    return ['travel', 'stay', 'services', 'service', 'booking', 'appointment', 'hotel', 'hospital', 'doctor', 'technician'].includes(cat) ||
+           Boolean(o.serviceName) || Boolean(o.appointment_slot) || Boolean(o.checkInDate) || Boolean(o.roomNumber);
   };
 
   // Standard Product, Food, Daily Needs Orders (NO JOBS, NO BUS, NO BOOKINGS)
@@ -804,6 +1054,7 @@ export default function OrdersScreen({
         const totalQty = Number(o.totalQuantity || (o.items && Array.isArray(o.items) && o.items.length > 0 ? o.items.reduce((acc: number, it: any) => acc + (Number(it.quantity) || 1), 0) : (o.quantity || 1)));
         const payStatus = o.paymentStatus || o.payment_status || (['Delivered', 'Completed'].includes(o.status) ? 'Paid' : 'Pending');
         const payMethod = o.paymentMethod || o.payment_method || '';
+        const orderCat = resolveOrderCategory(o);
 
         return {
           id: o.order_number || o.id || o._id,
@@ -815,11 +1066,12 @@ export default function OrdersScreen({
           paymentStatus: payStatus,
           paymentMethod: payMethod,
           quantity: totalQty,
-          image: o.image || (o.items && o.items[0]?.image) || '',
+          image: formatImageUrl(o.imageUrl || o.image || (o.items && (o.items[0]?.image || o.items[0]?.imageUrl || o.items[0]?.img)) || ''),
           customerName: o.customer_name || o.memberName || 'Customer',
           customerPhone: o.customerPhone || o.customer_phone || o.phone || o.memberPhone || '',
           customerAddress: addrStr || '',
-          category: o.category || o.type || 'Products',
+          category: orderCat,
+          transactionType: 'Order' as const,
           rawOrder: o,
           isBusBooking: false,
         };
@@ -833,10 +1085,8 @@ export default function OrdersScreen({
       .filter(o => isBookingItem(o))
       .map(o => {
         const isBus = isBusOrder(o);
-        const catStr = String(o.category || o.type || '').trim().toLowerCase();
-        const isStay = ['stay', 'hotel', 'hotels', 'resort', 'rooms'].includes(catStr) || Boolean(o.checkInDate) || Boolean(o.roomNumber) || Boolean(o.staySchedule);
-        const isTravel = ['travel', 'travels', 'package', 'bus', 'vehicle', 'cab', 'car', 'bike', 'transport'].includes(catStr) || isBus || Boolean(o.boardingPoint) || Boolean(o.vehicleType);
-        const bookingCat: 'Services' | 'Stay' | 'Travel' = isStay ? 'Stay' : isTravel ? 'Travel' : 'Services';
+        const catInfo = resolveBookingCategoryInfo(o);
+        const bookingCat = catInfo.category;
 
         const travelers = Array.isArray(o.travelers) ? o.travelers : [];
         const primaryPassenger = travelers[0]?.name || o.memberName || o.customer_name || o.bookingHolder?.name || 'Customer';
@@ -927,8 +1177,10 @@ export default function OrdersScreen({
           phone: custPhone,
           customerAddress: cleanLocation || o.customerAddress || o.customer_address || '',
           serviceLocation: cleanLocation,
-          category: o.category || (isStay ? 'Stay' : isTravel ? 'Travel' : 'Services'),
+          category: o.category || (bookingCat !== 'Unknown' ? bookingCat : 'Services'),
           bookingCategory: bookingCat,
+          bookingBadgeLabel: catInfo.badgeLabel,
+          badgeColors: catInfo,
           serviceDate: finalServiceDate,
           serviceTime: finalServiceTime,
           // Stay fields
@@ -947,6 +1199,7 @@ export default function OrdersScreen({
           departureTime: dTime,
           passengerCount: passCount,
           rawOrder: o,
+          transactionType: 'Booking' as const,
           isBusBooking: isBus,
         };
       })
@@ -995,7 +1248,7 @@ export default function OrdersScreen({
           dateTime: subDate,
           amount: '', // Amount removed as requested by user
           status: o.status || 'APPLICATION RECEIVED',
-          image: o.image || (o.items && o.items[0]?.image) || '',
+          image: formatImageUrl(o.imageUrl || o.image || (o.items && (o.items[0]?.image || o.items[0]?.imageUrl || o.items[0]?.img)) || ''),
           customerName: candidateName,
           customerPhone: candidatePhone,
           customerAddress: addrStr || '',
@@ -1004,6 +1257,7 @@ export default function OrdersScreen({
           candidateEducation: parsedEducation || 'Graduate',
           candidateExperience: parsedExperience || 'Fresher',
           category: 'Jobs',
+          transactionType: 'Job Application' as const,
           rawOrder: o,
         };
       })
@@ -1066,9 +1320,11 @@ export default function OrdersScreen({
         ]}>
         {/* Top Header Badge Row */}
         <View style={tw`flex-row items-center justify-between mb-2.5`}>
-          <View style={[tw`flex-row items-center px-2.5 py-1 rounded-full`, isDark ? tw`bg-indigo-950/60` : tw`bg-indigo-50`]}>
-            <Compass size={13} color="#6366F1" style={tw`mr-1.5`} />
-            <Text style={tw`text-[11px] font-black text-indigo-600 tracking-wider`}>BUS TICKET BOOKING</Text>
+          <View style={[tw`flex-row items-center px-2.5 py-1 rounded-full`, isDark ? tw`bg-blue-950/60` : tw`bg-blue-50`]}>
+            <Compass size={13} color="#2563EB" style={tw`mr-1.5`} />
+            <Text style={tw`text-[11px] font-black text-blue-700 dark:text-blue-400 tracking-wider`}>
+              {item.bookingBadgeLabel || 'TRAVEL BOOKING'}
+            </Text>
           </View>
           <View
             style={[
@@ -1092,17 +1348,17 @@ export default function OrdersScreen({
         {/* Bus Name & Booking ID */}
         <TouchableOpacity
           activeOpacity={0.8}
-          onPress={() => (item.customerName ? setSelectedOrder(item) : setSelectedBooking(item))}>
+          onPress={() => setSelectedBooking(item)}>
           <View style={tw`flex-row items-start justify-between`}>
             <View style={tw`flex-1 mr-2`}>
               <Text style={[tw`text-base font-extrabold`, isDark ? tw`text-white` : tw`text-gray-900`]}>
                 {raw.bus_name || item.name || item.serviceName || 'Intercity Bus'}
               </Text>
               <Text style={[tw`text-xs mt-0.5`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
-                PNR / Booking: <Text style={tw`font-mono font-bold text-indigo-500`}>{item.id}</Text>
+                PNR / Booking: <Text style={tw`font-mono font-bold text-blue-600 dark:text-blue-400`}>#{item.id}</Text>
               </Text>
             </View>
-            <Text style={[tw`text-base font-black text-indigo-600`]}>
+            <Text style={[tw`text-base font-black text-blue-600 dark:text-blue-400`]}>
               {item.amount && item.amount !== '₹0' ? item.amount : 'Paid'}
             </Text>
           </View>
@@ -1168,7 +1424,7 @@ export default function OrdersScreen({
           )}
           <TouchableOpacity
             activeOpacity={0.7}
-            onPress={() => (item.customerName ? setSelectedOrder(item) : setSelectedBooking(item))}
+            onPress={() => setSelectedBooking(item)}
             style={[
               tw`px-3 py-2.5 rounded-xl border items-center justify-center`,
               isDark ? tw`border-zinc-700 bg-zinc-800` : tw`border-gray-200 bg-gray-50`,
@@ -1491,9 +1747,6 @@ export default function OrdersScreen({
             </View>
           ) : (
             filteredOrders.map(order => {
-              if (order.isBusBooking) {
-                return renderBusBookingCard(order);
-              }
               const config = statusConfig[order.status] || {
                 color: '#4B5563',
                 bgColor: '#F3F4F6',
@@ -1518,9 +1771,15 @@ export default function OrdersScreen({
                       elevation: 2,
                     },
                   ]}>
-                  {/* Header Row: Order ID + Status Badges */}
+                  {/* Header Row: Category Badge + Order ID + Status Badges */}
                   <View style={tw`flex-row items-center justify-between mb-3`}>
                     <View style={tw`flex-row items-center`}>
+                      <View style={[tw`flex-row items-center px-2.5 py-1 rounded-full mr-2`, isDark ? tw`bg-indigo-950/60` : tw`bg-indigo-50`]}>
+                        <Package size={13} color="#4F46E5" style={tw`mr-1.5`} />
+                        <Text style={tw`text-[11px] font-black text-indigo-700 dark:text-indigo-400 tracking-wider`}>
+                          {order.category ? `${String(order.category).toUpperCase()} ORDER` : 'ORDER'}
+                        </Text>
+                      </View>
                       <Text style={[tw`font-extrabold text-base`, isDark ? tw`text-white` : tw`text-gray-900`]}>
                         #{order.id}
                       </Text>
@@ -1570,7 +1829,7 @@ export default function OrdersScreen({
                   <View style={tw`flex-row items-start mb-3`}>
                     {order.image ? (
                       <Image
-                        source={{ uri: order.image }}
+                        source={{ uri: formatImageUrl(order.image) }}
                         style={tw`w-16 h-16 rounded-xl mr-3 bg-gray-100`}
                       />
                     ) : (
@@ -1677,7 +1936,7 @@ export default function OrdersScreen({
                     <View style={tw`flex-row items-center justify-between mb-2.5`}>
                       <View style={[tw`flex-row items-center px-2.5 py-1 rounded-full`, isDark ? tw`bg-amber-950/60` : tw`bg-amber-50`]}>
                         <CalendarCheck size={13} color="#D97706" style={tw`mr-1.5`} />
-                        <Text style={tw`text-[11px] font-black text-amber-700 dark:text-amber-400 tracking-wider`}>STAY BOOKING</Text>
+                        <Text style={tw`text-[11px] font-black text-amber-700 dark:text-amber-400 tracking-wider`}>{booking.bookingBadgeLabel || 'STAY BOOKING'}</Text>
                       </View>
 
                       <View style={tw`flex-row items-center gap-x-1.5`}>
@@ -1784,7 +2043,7 @@ export default function OrdersScreen({
                     <View style={tw`flex-row items-center justify-between mb-2.5`}>
                       <View style={[tw`flex-row items-center px-2.5 py-1 rounded-full`, isDark ? tw`bg-blue-950/60` : tw`bg-blue-50`]}>
                         <Compass size={13} color="#2563EB" style={tw`mr-1.5`} />
-                        <Text style={tw`text-[11px] font-black text-blue-700 dark:text-blue-400 tracking-wider`}>TRAVEL BOOKING</Text>
+                        <Text style={tw`text-[11px] font-black text-blue-700 dark:text-blue-400 tracking-wider`}>{booking.bookingBadgeLabel || 'TRAVEL BOOKING'}</Text>
                       </View>
 
                       <View style={tw`flex-row items-center gap-x-1.5`}>
@@ -1885,9 +2144,21 @@ export default function OrdersScreen({
                   ]}>
                   {/* Header Row: Service Tag + Booking ID + Status Badges */}
                   <View style={tw`flex-row items-center justify-between mb-2.5`}>
-                    <View style={[tw`flex-row items-center px-2.5 py-1 rounded-full`, isDark ? tw`bg-teal-950/60` : tw`bg-teal-50`]}>
-                      <CalendarCheck size={13} color="#0D9488" style={tw`mr-1.5`} />
-                      <Text style={tw`text-[11px] font-black text-teal-700 dark:text-teal-400 tracking-wider`}>SERVICE BOOKING</Text>
+                    <View style={[
+                      tw`flex-row items-center px-2.5 py-1 rounded-full`,
+                      booking.bookingCategory === 'Unknown'
+                        ? (isDark ? tw`bg-zinc-800` : tw`bg-gray-100`)
+                        : (isDark ? tw`bg-teal-950/60` : tw`bg-teal-50`)
+                    ]}>
+                      <CalendarCheck size={13} color={booking.bookingCategory === 'Unknown' ? (isDark ? '#A1A1AA' : '#6B7280') : '#0D9488'} style={tw`mr-1.5`} />
+                      <Text style={[
+                        tw`text-[11px] font-black tracking-wider`,
+                        booking.bookingCategory === 'Unknown'
+                          ? (isDark ? tw`text-zinc-400` : tw`text-gray-600`)
+                          : tw`text-teal-700 dark:text-teal-400`
+                      ]}>
+                        {booking.bookingBadgeLabel || 'SERVICE BOOKING'}
+                      </Text>
                     </View>
 
                     <View style={tw`flex-row items-center gap-x-1.5`}>
@@ -2133,9 +2404,16 @@ export default function OrdersScreen({
                 {/* Header */}
                 <View style={tw`flex-row justify-between items-center mb-5`}>
                   <View>
-                    <Text style={[tw`text-xl font-bold`, isDark ? tw`text-white` : tw`text-gray-900`]}>
-                      {isJob ? 'Application Details' : isBus ? 'Bus Booking Details' : 'Order Details'}
-                    </Text>
+                    <View style={tw`flex-row items-center flex-wrap gap-2`}>
+                      <Text style={[tw`text-xl font-bold`, isDark ? tw`text-white` : tw`text-gray-900`]}>
+                        {isJob ? 'Application Details' : isBus ? 'Bus Booking Details' : 'Order Details'}
+                      </Text>
+                      <View style={[tw`px-2.5 py-0.5 rounded-full`, isDark ? tw`bg-indigo-950/60` : tw`bg-indigo-50`]}>
+                        <Text style={tw`text-[10px] font-black tracking-wider text-indigo-700 dark:text-indigo-400`}>
+                          {isJob ? 'JOB APPLICATION' : (selectedOrder.category ? `${String(selectedOrder.category).toUpperCase()} ORDER` : 'ORDER')}
+                        </Text>
+                      </View>
+                    </View>
                     <Text style={[tw`text-xs mt-0.5`, isDark ? tw`text-zinc-400` : tw`text-gray-400`]}>
                       {isJob ? 'Application ID: ' : isBus ? 'PNR / Booking: ' : 'Order ID: '}{selectedOrder.id}
                     </Text>
@@ -2151,7 +2429,7 @@ export default function OrdersScreen({
                   {/* Item Details Card */}
                   <View style={[tw`rounded-2xl p-4 mb-4 flex-row items-center border`, isDark ? tw`bg-zinc-950 border-zinc-850` : tw`bg-gray-50 border-gray-100`]}>
                     {selectedOrder.image ? (
-                      <Image source={{uri: selectedOrder.image}} style={tw`w-16 h-16 rounded-xl mr-4`} />
+                      <Image source={{uri: formatImageUrl(selectedOrder.image)}} style={tw`w-16 h-16 rounded-xl mr-4`} />
                     ) : isJob ? (
                       <View style={[tw`w-16 h-16 rounded-xl mr-4 items-center justify-center`, isDark ? tw`bg-zinc-800` : tw`bg-indigo-50`]}>
                         <Briefcase size={26} color="#4F46E5" />
@@ -2694,10 +2972,36 @@ export default function OrdersScreen({
               <View style={[tw`rounded-t-3xl px-5 pt-6 pb-8 max-h-[85%]`, isDark ? tw`bg-zinc-900` : tw`bg-white`]}>
                 {/* Header */}
                 <View style={tw`flex-row justify-between items-center mb-5`}>
-                  <View>
-                    <Text style={[tw`text-xl font-bold`, isDark ? tw`text-white` : tw`text-gray-900`]}>
-                      {isBus ? 'Bus Booking Details' : 'Booking Details'}
-                    </Text>
+                  <View style={tw`flex-1 mr-2`}>
+                    <View style={tw`flex-row items-center flex-wrap gap-2`}>
+                      <Text style={[tw`text-xl font-bold`, isDark ? tw`text-white` : tw`text-gray-900`]}>
+                        {isBus ? 'Bus Booking Details' : 'Booking Details'}
+                      </Text>
+                      {Boolean(selectedBooking.bookingBadgeLabel) && (
+                        <View
+                          style={[
+                            tw`px-2.5 py-0.5 rounded-full border`,
+                            {
+                              backgroundColor: isDark
+                                ? (selectedBooking.badgeColors?.darkBgColor || '#27272A')
+                                : (selectedBooking.badgeColors?.bgColor || '#F3F4F6'),
+                              borderColor: selectedBooking.badgeColors?.borderColor || '#E5E7EB',
+                            },
+                          ]}>
+                          <Text
+                            style={[
+                              tw`text-[10px] font-black tracking-wider`,
+                              {
+                                color: isDark
+                                  ? (selectedBooking.badgeColors?.darkTextColor || '#A1A1AA')
+                                  : (selectedBooking.badgeColors?.textColor || '#4B5563'),
+                              },
+                            ]}>
+                            {selectedBooking.bookingBadgeLabel}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
                     <Text style={[tw`text-xs mt-0.5`, isDark ? tw`text-zinc-400` : tw`text-gray-400`]}>
                       {isBus ? 'PNR / Booking: ' : 'Booking ID: '}{selectedBooking.id}
                     </Text>
@@ -2941,7 +3245,7 @@ export default function OrdersScreen({
                           </TouchableOpacity>
                         </View>
                       )}
-                      {selectedBooking.status === 'Confirmed' && Boolean(raw.category === 'Stay' || raw.type === 'Stay' || raw.checkInDate) && (
+                      {selectedBooking.status === 'Confirmed' && selectedBooking.bookingCategory === 'Stay' && (
                         <TouchableOpacity
                           onPress={() => handleStatusTransition(selectedBooking.id, 'Checked In')}
                           style={[tw`flex-1 py-3 rounded-2xl items-center justify-center bg-emerald-600`]}>
@@ -2955,7 +3259,7 @@ export default function OrdersScreen({
                           <Text style={tw`text-white font-bold text-xs`}>Mark Checked Out & Completed</Text>
                         </TouchableOpacity>
                       )}
-                      {selectedBooking.status === 'Confirmed' && !Boolean(raw.category === 'Stay' || raw.type === 'Stay' || raw.checkInDate) && (
+                      {selectedBooking.status === 'Confirmed' && selectedBooking.bookingCategory !== 'Stay' && (
                         <TouchableOpacity
                           onPress={() => handleStatusTransition(selectedBooking.id, 'Completed')}
                           style={[tw`flex-1 py-3 rounded-2xl items-center justify-center bg-blue-600`]}>

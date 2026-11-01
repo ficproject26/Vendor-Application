@@ -23,12 +23,18 @@ export interface NotificationTapEvent {
 
 class SoundNotificationService {
   private isSoundPlaying: boolean = false;
+  private lastSoundPlayedAt: number = 0;
 
   /**
-   * Play incoming order sound & trigger vibration pattern
+   * Play incoming order sound & trigger vibration pattern (guarded against duplicate rings)
    */
   playNewOrderSound() {
     try {
+      const now = Date.now();
+      if (now - this.lastSoundPlayedAt < 2500) {
+        return; // Guard against overlapping duplicate rings
+      }
+      this.lastSoundPlayedAt = now;
       this.isSoundPlaying = true;
       Vibration.vibrate([0, 500, 200, 500]);
 
@@ -46,6 +52,7 @@ class SoundNotificationService {
   stopNewOrderSound() {
     try {
       this.isSoundPlaying = false;
+      this.lastSoundPlayedAt = 0;
       Vibration.cancel();
       if (OrderAlertModule && typeof OrderAlertModule.stopAlertSound === 'function') {
         OrderAlertModule.stopAlertSound();

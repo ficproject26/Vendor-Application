@@ -465,8 +465,8 @@ export default function ProfileScreen({
         <Text style={[tw`text-xs font-bold uppercase tracking-wider mb-2.5 ml-1`, isDark ? tw`text-zinc-400` : tw`text-gray-700`]}>Store Status</Text>
         <View
           style={[
-            tw`bg-white rounded-2xl p-4 mb-4`,
-            isDark && tw`bg-zinc-900 border border-zinc-800`,
+            tw`rounded-2xl p-4 mb-4`,
+            isDark ? tw`bg-zinc-900 border border-zinc-800` : tw`bg-white border border-gray-100`,
             {
               shadowColor: '#000',
               shadowOffset: {width: 0, height: 1},
@@ -477,7 +477,7 @@ export default function ProfileScreen({
           ]}>
           <View style={tw`flex-row items-center justify-between`}>
             <View style={tw`flex-row items-center`}>
-              <View style={[tw`w-10 h-10 rounded-xl items-center justify-center mr-3`, {backgroundColor: '#EFF6FF'}]}>
+              <View style={[tw`w-10 h-10 rounded-xl items-center justify-center mr-3`, isDark ? tw`bg-zinc-800` : {backgroundColor: '#EFF6FF'}]}>
                 <Store size={20} color="#2563EB" />
               </View>
               <View>
@@ -500,7 +500,7 @@ export default function ProfileScreen({
         <View
           style={[
             tw`rounded-2xl overflow-hidden mb-4`,
-            isDark ? tw`bg-zinc-900 border border-zinc-800` : tw`bg-white`,
+            isDark ? tw`bg-zinc-900 border border-zinc-800` : tw`bg-white border border-gray-100`,
             {
               shadowColor: '#000',
               shadowOffset: {width: 0, height: 1},
@@ -513,14 +513,14 @@ export default function ProfileScreen({
           <TouchableOpacity 
             onPress={() => onNavigate?.('Orders')}
             activeOpacity={0.7}
-            style={[tw`flex-row items-center justify-between p-4`, isDark ? tw`border-b border-zinc-800` : tw`border-b border-gray-50`]}>
+            style={[tw`flex-row items-center justify-between p-4`, isDark ? tw`border-b border-zinc-800` : tw`border-b border-gray-100`]}>
             <View style={tw`flex-row items-center`}>
               <View style={[tw`w-10 h-10 rounded-xl items-center justify-center mr-3`, isDark ? tw`bg-zinc-800` : {backgroundColor: '#EEF2FF'}]}>
                 <ClipboardList size={20} color="#4F46E5" />
               </View>
               <View>
                 <Text style={[tw`font-bold text-sm`, isDark ? tw`text-white` : tw`text-gray-900`]}>My Orders</Text>
-                <Text style={[tw`text-xs mt-0.5`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>View customer orders and status</Text>
+                <Text style={[tw`text-xs mt-0.5`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>View customer orders and status</Text>
               </View>
             </View>
             <ChevronRight size={18} color="#9CA3AF" />
@@ -530,14 +530,14 @@ export default function ProfileScreen({
           <TouchableOpacity 
             onPress={() => onNavigate?.('Subscriptions')}
             activeOpacity={0.7}
-            style={[tw`flex-row items-center justify-between p-4`, isDark ? tw`border-b border-zinc-800` : tw`border-b border-gray-50`]}>
+            style={[tw`flex-row items-center justify-between p-4`, isDark ? tw`border-b border-zinc-800` : tw`border-b border-gray-100`]}>
             <View style={tw`flex-row items-center`}>
               <View style={[tw`w-10 h-10 rounded-xl items-center justify-center mr-3`, isDark ? tw`bg-zinc-800` : {backgroundColor: '#ECFDF5'}]}>
                 <Sparkles size={20} color="#059669" />
               </View>
               <View>
                 <Text style={[tw`font-bold text-sm`, isDark ? tw`text-white` : tw`text-gray-900`]}>Subscriptions & Plans</Text>
-                <Text style={[tw`text-xs mt-0.5`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>1-month validity plans & invoices</Text>
+                <Text style={[tw`text-xs mt-0.5`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>1-month validity plans & invoices</Text>
               </View>
             </View>
             <ChevronRight size={18} color="#9CA3AF" />
@@ -547,14 +547,14 @@ export default function ProfileScreen({
           <TouchableOpacity 
             onPress={() => onNavigate?.('VendorPayments')}
             activeOpacity={0.7}
-            style={[tw`flex-row items-center justify-between p-4`, isDark ? tw`border-b border-zinc-800` : tw`border-b border-gray-50`]}>
+            style={[tw`flex-row items-center justify-between p-4`, isDark ? tw`border-b border-zinc-800` : tw`border-b border-gray-100`]}>
             <View style={tw`flex-row items-center`}>
               <View style={[tw`w-10 h-10 rounded-xl items-center justify-center mr-3`, isDark ? tw`bg-zinc-800` : {backgroundColor: '#EEF2FF'}]}>
                 <Landmark size={20} color="#4F46E5" />
               </View>
               <View>
                 <Text style={[tw`font-bold text-sm`, isDark ? tw`text-white` : tw`text-gray-900`]}>Payouts & Settlements</Text>
-                <Text style={[tw`text-xs mt-0.5`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>Sales payments & bank payout records</Text>
+                <Text style={[tw`text-xs mt-0.5`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>Sales payments & bank payout records</Text>
               </View>
             </View>
             <ChevronRight size={18} color="#9CA3AF" />
@@ -564,7 +564,7 @@ export default function ProfileScreen({
           <TouchableOpacity 
             onPress={() => onNavigate?.('Queries')}
             activeOpacity={0.7}
-            style={[tw`flex-row items-center justify-between p-4`, isDark ? tw`border-b border-zinc-800` : tw`border-b border-gray-50`]}>
+            style={[tw`flex-row items-center justify-between p-4`, isDark ? tw`border-b border-zinc-800` : tw`border-b border-gray-100`]}>
             <View style={tw`flex-row items-center`}>
               <View style={[tw`w-10 h-10 rounded-xl items-center justify-center mr-3`, isDark ? tw`bg-zinc-800` : {backgroundColor: '#FEF3C7'}]}>
                 <Headphones size={20} color="#D97706" />
@@ -581,7 +581,7 @@ export default function ProfileScreen({
           <TouchableOpacity 
             onPress={() => onNavigate?.('DeliveryPartners')}
             activeOpacity={0.7}
-            style={[tw`flex-row items-center justify-between p-4`, isDark ? tw`border-b border-zinc-800` : tw`border-b border-gray-50`]}>
+            style={[tw`flex-row items-center justify-between p-4`, isDark ? tw`border-b border-zinc-800` : tw`border-b border-gray-100`]}>
             <View style={tw`flex-row items-center`}>
               <View style={[tw`w-10 h-10 rounded-xl items-center justify-center mr-3`, isDark ? tw`bg-zinc-800` : {backgroundColor: '#EFF6FF'}]}>
                 <Truck size={20} color="#2563EB" />
@@ -598,7 +598,7 @@ export default function ProfileScreen({
           <TouchableOpacity 
             onPress={() => onNavigate?.('Customers')}
             activeOpacity={0.7}
-            style={[tw`flex-row items-center justify-between p-4`, isDark ? tw`border-b border-zinc-800` : tw`border-b border-gray-50`]}>
+            style={[tw`flex-row items-center justify-between p-4`, isDark ? tw`border-b border-zinc-800` : tw`border-b border-gray-100`]}>
             <View style={tw`flex-row items-center`}>
               <View style={[tw`w-10 h-10 rounded-xl items-center justify-center mr-3`, isDark ? tw`bg-zinc-800` : {backgroundColor: '#FDF2F8'}]}>
                 <Users size={20} color="#DB2777" />
@@ -615,7 +615,7 @@ export default function ProfileScreen({
           <TouchableOpacity 
             onPress={() => onNavigate?.('Business')}
             activeOpacity={0.7}
-            style={[tw`flex-row items-center justify-between p-4`, isDark ? tw`border-b border-zinc-800` : tw`border-b border-gray-50`]}>
+            style={[tw`flex-row items-center justify-between p-4`, isDark ? tw`border-b border-zinc-800` : tw`border-b border-gray-100`]}>
             <View style={tw`flex-row items-center`}>
               <View style={[tw`w-10 h-10 rounded-xl items-center justify-center mr-3`, isDark ? tw`bg-zinc-800` : {backgroundColor: '#E0F2FE'}]}>
                 <Store size={20} color="#0284C7" />
@@ -651,7 +651,7 @@ export default function ProfileScreen({
         <View
           style={[
             tw`rounded-2xl overflow-hidden mb-4`,
-            isDark ? tw`bg-zinc-900 border border-zinc-800` : tw`bg-white`,
+            isDark ? tw`bg-zinc-900 border border-zinc-800` : tw`bg-white border border-gray-100`,
             {
               shadowColor: '#000',
               shadowOffset: {width: 0, height: 1},
@@ -661,14 +661,14 @@ export default function ProfileScreen({
             },
           ]}>
           {/* Notifications */}
-          <View style={[tw`flex-row items-center justify-between p-4`, isDark ? tw`border-b border-zinc-800` : tw`border-b border-gray-50`]}>
+          <View style={[tw`flex-row items-center justify-between p-4`, isDark ? tw`border-b border-zinc-800` : tw`border-b border-gray-100`]}>
             <View style={tw`flex-row items-center`}>
               <View style={[tw`w-10 h-10 rounded-xl items-center justify-center mr-3`, isDark ? tw`bg-zinc-800` : {backgroundColor: '#FEF2F2'}]}>
                 <Bell size={20} color="#DC2626" />
               </View>
               <View>
                 <Text style={[tw`font-bold text-sm`, isDark ? tw`text-white` : tw`text-gray-900`]}>Push Notifications</Text>
-                <Text style={[tw`text-xs mt-0.5`, isDark ? tw`text-zinc-500` : tw`text-gray-500`]}>Enable real-time alerts</Text>
+                <Text style={[tw`text-xs mt-0.5`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>Enable real-time alerts</Text>
               </View>
             </View>
             <Switch
@@ -685,7 +685,7 @@ export default function ProfileScreen({
               Alert.alert('Store Profile Details', 'Manage your store brand name, descriptions, banner images, logo, business contacts, and GPS location.');
             }}
             activeOpacity={0.7}
-            style={[tw`flex-row items-center justify-between p-4`, isDark ? tw`border-b border-zinc-800` : tw`border-b border-gray-50`]}>
+            style={[tw`flex-row items-center justify-between p-4`, isDark ? tw`border-b border-zinc-800` : tw`border-b border-gray-100`]}>
             <View style={tw`flex-row items-center`}>
               <View style={[tw`w-10 h-10 rounded-xl items-center justify-center mr-3`, isDark ? tw`bg-zinc-800` : {backgroundColor: '#EEF2FF'}]}>
                 <User size={20} color="#4F46E5" />
@@ -704,7 +704,7 @@ export default function ProfileScreen({
               Alert.alert('Security & PIN', 'Update your authentication password, manage security PIN, or configure touch / face biometrics for quick logging.');
             }}
             activeOpacity={0.7}
-            style={[tw`flex-row items-center justify-between p-4`, isDark ? tw`border-b border-zinc-800` : tw`border-b border-gray-50`]}>
+            style={[tw`flex-row items-center justify-between p-4`, isDark ? tw`border-b border-zinc-800` : tw`border-b border-gray-100`]}>
             <View style={tw`flex-row items-center`}>
               <View style={[tw`w-10 h-10 rounded-xl items-center justify-center mr-3`, isDark ? tw`bg-zinc-800` : {backgroundColor: '#F5F3FF'}]}>
                 <Lock size={20} color="#7C3AED" />
@@ -742,7 +742,7 @@ export default function ProfileScreen({
         <View
           style={[
             tw`rounded-2xl overflow-hidden mb-5`,
-            isDark ? tw`bg-zinc-900 border border-zinc-800` : tw`bg-white`,
+            isDark ? tw`bg-zinc-900 border border-zinc-800` : tw`bg-white border border-gray-100`,
             {
               shadowColor: '#000',
               shadowOffset: {width: 0, height: 1},
@@ -756,7 +756,7 @@ export default function ProfileScreen({
               Alert.alert('Privacy Policy', 'Check details of our terms of use, privacy statement, and data protection settings.');
             }}
             activeOpacity={0.7}
-            style={[tw`flex-row items-center justify-between p-4`, isDark ? tw`border-b border-zinc-800` : tw`border-b border-gray-50`]}>
+            style={[tw`flex-row items-center justify-between p-4`, isDark ? tw`border-b border-zinc-800` : tw`border-b border-gray-100`]}>
             <View style={tw`flex-row items-center`}>
               <View style={[tw`w-10 h-10 rounded-xl items-center justify-center mr-3`, isDark ? tw`bg-zinc-800` : {backgroundColor: '#F0FDF4'}]}>
                 <Shield size={20} color="#16A34A" />

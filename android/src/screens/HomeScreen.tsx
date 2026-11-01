@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { fetchAnalytics, getVendorUser, fetchProfile, fetchOrders, fetchBookings, updateOrderStatus, fetchCustomers, CustomerItem, addLocalOrder, normalizeCategory, fetchVendorRatings } from '../services/apiService';
+import { sessionManager } from '../services/sessionManager';
 import { socketService } from '../services/socketService';
 import { soundNotificationService } from '../services/soundNotificationService';
 import {
@@ -266,8 +267,12 @@ export default function HomeScreen({
   const [recentOrdersList, setRecentOrdersList] = useState<any[]>([]);
   const [recentBookingsList, setRecentBookingsList] = useState<any[]>([]);
 
+  const vendorId = (activeUser?._id || activeUser?.id || activeUser?.vendorId || 'default').toString();
+
   const loadAnalytics = async () => {
-    setLoading(true);
+    if (!analytics) {
+      setLoading(true);
+    }
     try {
       const [data, ordersData, bookingsData] = await Promise.all([
         fetchAnalytics(),
@@ -275,20 +280,26 @@ export default function HomeScreen({
         fetchBookings().catch(() => []),
       ]);
       setAnalytics(data);
+      sessionManager.saveVendorCache(vendorId, 'analytics', data);
+
       if (Array.isArray(ordersData)) {
         // Seed existing order IDs into socketService so startup orders NEVER trigger alerts
         ordersData.forEach((o: any) => {
           const id = (o._id || o.id || o.order_number || '').toString();
           if (id) socketService.markOrderHandled(id);
         });
-        setRecentOrdersList(ordersData.slice(0, 5));
+        const sliceOrders = ordersData.slice(0, 5);
+        setRecentOrdersList(sliceOrders);
+        sessionManager.saveVendorCache(vendorId, 'recent_orders', sliceOrders);
       }
       if (Array.isArray(bookingsData)) {
         bookingsData.forEach((b: any) => {
           const id = (b._id || b.id || b.order_number || '').toString();
           if (id) socketService.markOrderHandled(id);
         });
-        setRecentBookingsList(bookingsData.slice(0, 5));
+        const sliceBookings = bookingsData.slice(0, 5);
+        setRecentBookingsList(sliceBookings);
+        sessionManager.saveVendorCache(vendorId, 'recent_bookings', sliceBookings);
       }
     } catch (err: any) {
       console.warn("Failed to load analytics:", err.message);
@@ -298,9 +309,28 @@ export default function HomeScreen({
   };
 
   useEffect(() => {
+    let isMounted = true;
+    // Fast optimistic hydration from encrypted local store (< 10ms)
+    Promise.all([
+      sessionManager.getVendorCache(vendorId, 'analytics'),
+      sessionManager.getVendorCache(vendorId, 'recent_orders'),
+      sessionManager.getVendorCache(vendorId, 'recent_bookings'),
+      sessionManager.getVendorCache(vendorId, 'ratings'),
+    ]).then(([cAnalytics, cOrders, cBookings, cRatings]) => {
+      if (!isMounted) return;
+      if (cAnalytics) setAnalytics(cAnalytics);
+      if (Array.isArray(cOrders) && cOrders.length > 0) setRecentOrdersList(cOrders);
+      if (Array.isArray(cBookings) && cBookings.length > 0) setRecentBookingsList(cBookings);
+      if (cRatings) setRatingsData(cRatings);
+    }).catch(() => {});
+
     loadAnalytics();
     loadVendorRatings();
-  }, []);
+
+    return () => {
+      isMounted = false;
+    };
+  }, [vendorId]);
 
   // Customer Ratings & Reviews States
   const [isReviewsVisible, setIsReviewsVisible] = useState(false);
@@ -325,16 +355,20 @@ export default function HomeScreen({
   });
 
   const loadVendorRatings = async () => {
-    setLoadingRatings(true);
+    if (!ratingsData.totalRatings) {
+      setLoadingRatings(true);
+    }
     try {
       const res = await fetchVendorRatings();
       if (res && res.success) {
-        setRatingsData({
+        const rData = {
           averageRating: res.averageRating || 0,
           totalRatings: res.totalRatings || 0,
           breakdown: res.breakdown || { '5': 0, '4': 0, '3': 0, '2': 0, '1': 0 },
           reviews: res.reviews || [],
-        });
+        };
+        setRatingsData(rData);
+        sessionManager.saveVendorCache(vendorId, 'ratings', rData);
       }
     } catch (err) {
       console.warn('[HomeScreen] Failed to load ratings:', err);

@@ -1,5 +1,5 @@
 import React, {useState, useEffect, useRef, useCallback} from 'react';
-import {View, Text, TouchableOpacity, useColorScheme, PermissionsAndroid, Platform} from 'react-native';
+import {View, Text, TouchableOpacity, useColorScheme, PermissionsAndroid, Platform, AppState} from 'react-native';
 import {SafeAreaProvider} from 'react-native-safe-area-context';
 import tw, { useAppColorScheme } from 'twrnc';
 
@@ -276,25 +276,30 @@ function App() {
           setCurrentUser(stored.user);
           const tier = stored.user.membershipPlan === 'Gold' ? 'Gold' : stored.user.membershipPlan === 'Diamond' ? 'Diamond' : 'Silver';
           setPurchasedTier(tier);
+          setIsLoggedIn(true);
+          setIsInitializing(false); // Unblock UI immediately: < 20ms startup
         }
 
-        // Validate session with production backend in the background
-        const validation = await sessionManager.validateSession(stored.token);
-        if (isMounted) {
+        // Validate session with production backend asynchronously in the background
+        sessionManager.validateSession(stored.token).then(async (validation) => {
+          if (!isMounted) return;
           if (validation.valid) {
             if (validation.user) {
               setVendorUser(validation.user);
               setCurrentUser(validation.user);
               await sessionManager.saveSession(stored.token, validation.user, stored.rememberMe);
             }
-            setIsLoggedIn(true);
           } else {
             console.warn('[App] Session revoked/expired on backend:', validation.reason);
             await logoutVendor();
-            setIsLoggedIn(false);
-            setCurrentUser(null);
+            if (isMounted) {
+              setIsLoggedIn(false);
+              setCurrentUser(null);
+            }
           }
-        }
+        }).catch((err) => {
+          console.warn('[App] Background session validation exception:', err);
+        });
       } catch (err) {
         console.warn('[App] Session restoration exception:', err);
         if (isMounted) setIsLoggedIn(false);
@@ -370,6 +375,7 @@ function App() {
 
   const dismissCurrentModal = useCallback(() => {
     clearModalTimers();
+    soundNotificationService.stopNewOrderSound();
     if (modalQueueRef.current && modalQueueRef.current.length > 0) {
       const nextNotif = modalQueueRef.current.shift()!;
       displayModalNotification(nextNotif);
@@ -520,7 +526,10 @@ function App() {
       const unsubscribe = socketService.onNotificationReceived((notif) => {
         console.log('📢 [App.tsx] Received notification:', notif?.id, notif?.category, notif?.title);
         setActiveNotification(notif);
-        enqueueOrDisplayModalNotification(notif);
+        // Only pop up in-app modal if app is actively in foreground; background displays system tray notification
+        if (AppState.currentState === 'active') {
+          enqueueOrDisplayModalNotification(notif);
+        }
       });
 
       return () => {
@@ -547,6 +556,14 @@ function App() {
 
   useEffect(() => {
     if (isLoggedIn) {
+      const vendorId = currentUser?._id || currentUser?.id || 'default';
+      // Optimistically restore cached catalog items immediately (< 10ms)
+      sessionManager.getVendorCache(vendorId, 'catalog_items').then((cached) => {
+        if (Array.isArray(cached) && cached.length > 0) {
+          setBusinessItems(cached);
+        }
+      }).catch(() => {});
+
       const loadAllData = async () => {
         try {
           const profRes = await fetchProfile();
@@ -558,7 +575,10 @@ function App() {
             }
           }
           const items = await fetchAllBusinessesProducts();
-          setBusinessItems(Array.isArray(items) ? items : []);
+          if (Array.isArray(items)) {
+            setBusinessItems(items);
+            sessionManager.saveVendorCache(vendorId, 'catalog_items', items);
+          }
         } catch (err) {
           console.warn('Failed to load profile/products:', err);
         }

@@ -435,6 +435,61 @@ export const uploadImageToServer = async (
 
 const DEFAULT_FALLBACK_IMAGE = '';
 
+export const formatImageUrl = (url: string | undefined | null): string => {
+  if (!url || typeof url !== 'string') return '';
+  const clean = url.trim();
+  if (!clean || clean.toLowerCase().startsWith('preview')) return '';
+
+  if (clean.startsWith('data:') || clean.startsWith('blob:')) {
+    return clean;
+  }
+
+  // Cloudinary optimization & HTTPS
+  if (clean.includes('res.cloudinary.com')) {
+    let cUrl = clean.startsWith('http://res.cloudinary.com') ? clean.replace(/^http:\/\//, 'https://') : clean;
+    if (cUrl.includes('/upload/') && !cUrl.includes('/upload/f_auto') && !cUrl.includes('/upload/q_auto') && !cUrl.includes('/upload/w_')) {
+      cUrl = cUrl.replace('/upload/', '/upload/f_auto,q_auto,w_500,c_limit/');
+    }
+    return cUrl;
+  }
+
+  let backend = (BASE_URL || 'https://vendor.ficapp.in/api').replace(/\/api\/?$/, '');
+  if (!backend || !backend.startsWith('http')) {
+    backend = 'https://vendor.ficapp.in';
+  }
+
+  // If already absolute HTTP/HTTPS URL
+  if (clean.startsWith('http://') || clean.startsWith('https://')) {
+    if (
+      clean.includes('trycloudflare.com') ||
+      clean.includes(':8000') ||
+      clean.includes(':8001') ||
+      clean.includes('43.204.141.105') ||
+      clean.includes('localhost') ||
+      clean.includes('10.0.2.2')
+    ) {
+      return clean.replace(/^https?:\/\/[^/]+/, backend);
+    }
+    if (clean.includes('vendor.ficapp.in')) {
+      let httpsUrl = clean.replace(/^http:\/\//, 'https://');
+      if (httpsUrl.includes('vendor.ficapp.in/uploads/') && !httpsUrl.includes('vendor.ficapp.in/api/uploads/')) {
+        httpsUrl = httpsUrl.replace('vendor.ficapp.in/uploads/', 'vendor.ficapp.in/api/uploads/');
+      }
+      return httpsUrl;
+    }
+    return clean;
+  }
+
+  // Relative path with /uploads/ -> map to /api/uploads/
+  if (clean.includes('/uploads/')) {
+    const uploadPath = clean.substring(clean.indexOf('/uploads/'));
+    const apiUploadPath = uploadPath.startsWith('/api/') ? uploadPath : `/api${uploadPath}`;
+    return `${backend}${apiUploadPath}`;
+  }
+
+  return clean;
+};
+
 // Map API product response to App's BusinessItem
 export const mapApiProductToBusinessItem = (product: any, categoryFallback: CategoryKey = 'Products'): BusinessItem => {
   const isJob = Boolean(
@@ -481,19 +536,8 @@ export const mapApiProductToBusinessItem = (product: any, categoryFallback: Cate
     category: resolvedCategory,
     image: (() => {
       if (resolvedCategory === 'Jobs') return '';
-      let img = product.imageUrl || product.image || DEFAULT_FALLBACK_IMAGE;
-      if (typeof img === 'string') {
-        if (img.startsWith('/uploads/')) {
-          const rootBase = (BASE_URL || 'https://vendor.ficapp.in/api').replace(/\/api\/?$/, '');
-          img = `${rootBase}${img}`;
-        } else if (img.includes(':5000/uploads/')) {
-          const rootBase = (BASE_URL || 'https://vendor.ficapp.in/api').replace(/\/api\/?$/, '');
-          img = img.replace(/http:\/\/[^/]+:5000\/uploads\//, `${rootBase}/uploads/`);
-        } else if (img.includes('res.cloudinary.com') && img.includes('/upload/') && !img.includes('/upload/f_auto') && !img.includes('/upload/w_')) {
-          img = img.replace('/upload/', '/upload/f_auto,q_auto,w_400,c_limit/');
-        }
-      }
-      return img;
+      const rawImg = product.imageUrl || product.image || (Array.isArray(product.images) && product.images[0]) || DEFAULT_FALLBACK_IMAGE;
+      return formatImageUrl(rawImg);
     })(),
     subCategory: product.subCategory || product.subcategory || product.category || 'General',
     itemType: product.itemType || product.specialization || product.roomType || product.foodType || '',
@@ -829,11 +873,41 @@ export const fetchAllBusinessesProducts = async (): Promise<BusinessItem[]> => {
   try {
     const user = getVendorUser();
     const businesses = user?.businesses || [];
+    const allItems: BusinessItem[] = [];
+    const seenIds = new Set<string>();
+
+    const appendItems = (items: BusinessItem[]) => {
+      for (const item of items) {
+        const pid = item?.id;
+        if (pid && !seenIds.has(pid)) {
+          seenIds.add(pid);
+          allItems.push(item);
+        }
+      }
+    };
+
+    // 1. Fetch products using the unified vendor-level endpoint (matches parent ID & all vendor outlets)
+    try {
+      const data = await apiRequest('/vendor/products?type=all', {
+        method: 'GET',
+      });
+      if (data && data.data && Array.isArray(data.data)) {
+        appendItems(
+          data.data.map((prod: any) =>
+            mapApiProductToBusinessItem(prod, prod.vendorType || prod.category || 'Products')
+          )
+        );
+      }
+    } catch (err) {
+      console.warn('[fetchAllBusinessesProducts] Global fetch error:', err);
+    }
+
+    // 2. Query each registered business outlet to ensure complete multi-outlet catalog coverage
     if (businesses.length > 0) {
-      const results = await Promise.all(
+      await Promise.all(
         businesses.map(async (biz: any) => {
           const bId = biz._id || biz.id;
-          if (!bId) return [];
+          if (!bId) return;
           try {
             const res = await apiRequest('/vendor/products?type=all', {
               method: 'GET',
@@ -841,39 +915,20 @@ export const fetchAllBusinessesProducts = async (): Promise<BusinessItem[]> => {
             });
             if (res && res.data && Array.isArray(res.data)) {
               const bizCat = normalizeCategory(biz.vendorType || biz.category || biz.baseVendorType);
-              return res.data.map((prod: any) =>
-                mapApiProductToBusinessItem(prod, prod.vendorType || prod.category || bizCat)
+              appendItems(
+                res.data.map((prod: any) =>
+                  mapApiProductToBusinessItem(prod, prod.vendorType || prod.category || bizCat)
+                )
               );
             }
           } catch (err) {
             console.warn(`Failed to fetch products for business ${bId}:`, err);
           }
-          return [];
         })
       );
-
-      const allItems: BusinessItem[] = [];
-      const seenIds = new Set<string>();
-      for (const list of results) {
-        for (const item of list) {
-          const pid = item?.id;
-          if (pid && !seenIds.has(pid)) {
-            seenIds.add(pid);
-            allItems.push(item);
-          }
-        }
-      }
-      if (allItems.length > 0) {
-        return allItems;
-      }
     }
 
-    const data = await apiRequest('/vendor/products?type=all', {
-      method: 'GET',
-    });
-    if (data && data.data && Array.isArray(data.data)) {
-      return (data.data || []).map((prod: any) => mapApiProductToBusinessItem(prod, prod.vendorType || prod.category || 'Products'));
-    }
+    return allItems;
   } catch (err) {
     console.warn('Error fetching products from MongoDB Atlas:', err);
   }

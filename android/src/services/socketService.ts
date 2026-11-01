@@ -461,8 +461,11 @@ class VendorSocketService {
     const orderEvents = [
       'order:created',
       'ORDER_CREATED',
+      'order_created',
       'booking:created',
       'BOOKING_CREATED',
+      'new_booking',
+      'new_reservation',
       'application:created',
       'APPLICATION_CREATED',
       'new_order',
@@ -484,6 +487,9 @@ class VendorSocketService {
       this.handleStatusEvent(statusData);
     });
     this.socket.on('order:status_changed', (statusData: any) => {
+      this.handleStatusEvent(statusData);
+    });
+    this.socket.on('order_status_updated', (statusData: any) => {
       this.handleStatusEvent(statusData);
     });
 
