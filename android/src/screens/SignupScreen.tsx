@@ -54,6 +54,16 @@ const operatingHoursOptions = [
 const gstStatuses = ['GST Registered', 'Non-GST Declared'];
 const msmeStatuses = ['MSME Registered', 'Non-MSME'];
 
+const getCategoryEmoji = (cat: string) => {
+  const c = String(cat || '').toLowerCase();
+  if (c.includes('travel') || c.includes('ride') || c.includes('tour')) return '🚍';
+  if (c.includes('food') || c.includes('restaurant') || c.includes('dining')) return '🍽️';
+  if (c.includes('stay') || c.includes('hotel') || c.includes('room')) return '🏨';
+  if (c.includes('job') || c.includes('career') || c.includes('hire')) return '💼';
+  if (c.includes('service')) return '🛠️';
+  return '📦';
+};
+
 import { registerVendor, fetchMainCategories } from '../services/apiService';
 
 interface SignupScreenProps {
@@ -661,9 +671,10 @@ export default function SignupScreen({ onNavigateToLogin, onSignup, isDark = fal
                 <TextInput
                   style={tw`bg-gray-50 border border-gray-150 rounded-xl px-4 py-3 text-sm font-semibold text-gray-800`}
                   value={businessPhone}
-                  onChangeText={setBusinessPhone}
-                  placeholder="Enter business phone number"
+                  onChangeText={(val) => setBusinessPhone(val.replace(/[^0-9]/g, '').slice(0, 10))}
+                  placeholder="10-digit mobile number"
                   keyboardType="phone-pad"
+                  maxLength={10}
                 />
               </View>
 
@@ -771,9 +782,10 @@ export default function SignupScreen({ onNavigateToLogin, onSignup, isDark = fal
                 <TextInput
                   style={tw`bg-gray-50 border border-gray-150 rounded-xl px-4 py-3 text-sm font-semibold text-gray-800`}
                   value={alternatePhone}
-                  onChangeText={setAlternatePhone}
-                  placeholder="Alternate contact phone number"
+                  onChangeText={(val) => setAlternatePhone(val.replace(/[^0-9]/g, '').slice(0, 10))}
+                  placeholder="10-digit alternate mobile number"
                   keyboardType="phone-pad"
+                  maxLength={10}
                 />
               </View>
 
@@ -1104,9 +1116,10 @@ export default function SignupScreen({ onNavigateToLogin, onSignup, isDark = fal
                 <TextInput
                   style={tw`bg-gray-50 border border-gray-150 rounded-xl px-4 py-3 text-sm font-semibold text-gray-800`}
                   value={accountNo}
-                  onChangeText={setAccountNo}
-                  placeholder="Bank Account Number"
+                  onChangeText={(val) => setAccountNo(val.replace(/[^0-9]/g, '').slice(0, 18))}
+                  placeholder="Bank Account Number (9-18 digits)"
                   keyboardType="numeric"
+                  maxLength={18}
                 />
               </View>
 
@@ -1118,9 +1131,10 @@ export default function SignupScreen({ onNavigateToLogin, onSignup, isDark = fal
                 <TextInput
                   style={tw`bg-gray-50 border border-gray-150 rounded-xl px-4 py-3 text-sm font-semibold text-gray-800`}
                   value={ifscCode}
-                  onChangeText={setIfscCode}
-                  placeholder="Bank IFSC Code"
+                  onChangeText={(val) => setIfscCode(val.replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 11))}
+                  placeholder="Bank IFSC Code (11 alphanumeric)"
                   autoCapitalize="characters"
+                  maxLength={11}
                 />
               </View>
 
@@ -1152,7 +1166,7 @@ export default function SignupScreen({ onNavigateToLogin, onSignup, isDark = fal
                 <View style={tw`mb-4`}>
                   <Text style={tw`text-xs font-bold text-gray-800`}>Shop Name: <Text style={tw`font-semibold text-gray-600`}>{shopName}</Text></Text>
                   <Text style={tw`text-xs font-bold text-gray-800 mt-1`}>Operating Hours: <Text style={tw`font-semibold text-gray-600`}>{operatingHours}</Text></Text>
-                  <Text style={tw`text-xs font-bold text-gray-800 mt-1`}>Product or Service or etc: <Text style={tw`font-semibold text-gray-600`}>🛠️ {productOrService}</Text></Text>
+                  <Text style={tw`text-xs font-bold text-gray-800 mt-1`}>Business Category: <Text style={tw`font-semibold text-gray-600`}>{getCategoryEmoji(productOrService)} {productOrService}</Text></Text>
                   <Text style={tw`text-xs font-bold text-gray-800 mt-1`}>Phone/Email: <Text style={tw`font-semibold text-gray-600`}>{businessPhone} / {businessEmail}</Text></Text>
                   <Text style={tw`text-xs font-bold text-gray-800 mt-1`}>Website: <Text style={tw`font-semibold text-gray-600`}>{businessWebsite || 'None'}</Text></Text>
                   <Text style={tw`text-xs font-bold text-gray-800 mt-1`}>Address: <Text style={tw`font-semibold text-gray-600`}>{businessAddress}</Text></Text>

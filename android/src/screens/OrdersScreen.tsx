@@ -1,5 +1,5 @@
 import React, {useState, useEffect, useMemo} from 'react';
-import { fetchOrders, fetchBookings, fetchApplications, updateOrderStatus, getVendorUser, formatImageUrl, fetchOrderById, fetchProducts } from '../services/apiService';
+import { fetchOrders, fetchBookings, fetchApplications, updateOrderStatus, getVendorUser, formatImageUrl, fetchOrderById, fetchProducts, fetchAllBusinessesProducts } from '../services/apiService';
 import { socketService } from '../services/socketService';
 import { sessionManager } from '../services/sessionManager';
 import {
@@ -58,9 +58,29 @@ const getCustomerDisplayId = (item: any): string => {
   return 'N/A';
 };
 
+export const sanitizeCustomerAddress = (addrStr?: string): string => {
+  if (!addrStr || typeof addrStr !== 'string') return addrStr || '';
+  let res = addrStr.trim();
+  // If address contains Tamil Nadu districts or 60xxxx-64xxxx pincodes with 'Karnataka'
+  const isTN = /\b(dharmapuri|harur|salem|chennai|coimbatore|madurai|trichy|tiruchirappalli|tiruppur|erode|vellore|kanchipuram|hosur|krishnagiri|thanjavur|dindigul|cuddalore|tirunelveli|tuticorin|thoothukudi)\b/i.test(res) ||
+               /\b6[0-4][0-9]{4}\b/.test(res);
+  if (isTN && /karnataka/i.test(res)) {
+    res = res.replace(/\bkarnataka\b/gi, 'Tamil Nadu');
+  }
+  return res;
+};
+
 export const formatDisplayId = (idStr?: string, prefix?: string): string => {
   if (!idStr || idStr === 'N/A') return 'N/A';
   let clean = String(idStr).trim().replace(/^#+/, '');
+  // For Job IDs: completely remove '#' and shorten hex if 24 characters
+  if (prefix === 'JOB' || clean.toUpperCase().startsWith('JOB')) {
+    const rawId = clean.replace(/^JOB[-_]*/i, '');
+    if (/^[0-9a-fA-F]{24}$/.test(rawId)) {
+      return `JOB-${rawId.slice(-6).toUpperCase()}`;
+    }
+    return `JOB-${rawId}`;
+  }
   if (/^[0-9a-fA-F]{24}$/.test(clean)) {
     return prefix ? `${prefix}-${clean.slice(-6).toUpperCase()}` : `#${clean.slice(-6).toUpperCase()}`;
   }
@@ -346,6 +366,10 @@ const statusConfig: any = {
     color: '#F59E0B',
     bgColor: '#FFFBEB',
   },
+  'Booking Received': {
+    color: '#F59E0B',
+    bgColor: '#FFFBEB',
+  },
   Placed: {
     color: '#F59E0B',
     bgColor: '#FFFBEB',
@@ -508,8 +532,8 @@ export default function OrdersScreen({
       }
     }).catch(() => {});
 
-    // Hydrate catalog images to guarantee product images render in My Orders
-    fetchProducts().then((prods: any) => {
+    // Hydrate catalog images across ALL vendor businesses to guarantee product images render in My Orders
+    (fetchAllBusinessesProducts ? fetchAllBusinessesProducts() : fetchProducts()).then((prods: any) => {
       if (Array.isArray(prods) && isMounted) {
         const map: Record<string, string> = {};
         prods.forEach((p: any) => {
@@ -517,11 +541,12 @@ export default function OrdersScreen({
           if (img) {
             if (p._id) map[String(p._id)] = img;
             if (p.id) map[String(p.id)] = img;
+            if (p.productId) map[String(p.productId)] = img;
             if (p.name) map[String(p.name).trim().toLowerCase()] = img;
             if (p.productName) map[String(p.productName).trim().toLowerCase()] = img;
           }
         });
-        setProductImageMap(map);
+        setProductImageMap(prev => ({ ...prev, ...map }));
       }
     }).catch(() => {});
 
@@ -1159,7 +1184,8 @@ export default function OrdersScreen({
   };
 
   const transformRawToOrder = (o: any): Order => {
-    const addrStr = resolveCustomerLocation(o) || 'Delivery Address Provided with Order';
+    const rawAddrStr = resolveCustomerLocation(o) || 'Delivery Address Provided with Order';
+    const addrStr = sanitizeCustomerAddress(rawAddrStr);
     const totalQty = Number(o.totalQuantity || (o.items && Array.isArray(o.items) && o.items.length > 0 ? o.items.reduce((acc: number, it: any) => acc + (Number(it.quantity) || 1), 0) : (o.quantity || 1)));
     const rawPay = String(o.paymentStatus || o.payment_status || '').trim();
     const isCod = String(o.paymentMethod || o.payment_method || '').toLowerCase().includes('cod') || String(o.paymentMethod || o.payment_method || '').toLowerCase().includes('cash');
@@ -1178,7 +1204,12 @@ export default function OrdersScreen({
 
     const firstItemId = o.items?.[0]?.productId || o.items?.[0]?._id || o.productId;
     const firstItemName = (o.items?.[0]?.name || o.name || '').trim().toLowerCase();
-    const rawImg = o.imageUrl || o.image || (o.items && (o.items[0]?.image || o.items[0]?.imageUrl || o.items[0]?.img)) || (firstItemId && productImageMap[String(firstItemId)]) || (firstItemName && productImageMap[firstItemName]) || '';
+    const rawImg = o.imageUrl || o.image || (o.items && (o.items[0]?.image || o.items[0]?.imageUrl || o.items[0]?.img)) || (firstItemId && productImageMap[String(firstItemId)]) || (firstItemName && productImageMap[firstItemName]) || (o.name && productImageMap[String(o.name).trim().toLowerCase()]) || '';
+
+    let orderStatus = o.status || 'Pending';
+    if (['Food', 'Products', 'Daily Needs'].includes(orderCat) && orderStatus === 'Booking Received') {
+      orderStatus = 'Order Received';
+    }
 
     return {
       id: o.order_number || o.id || o._id,
@@ -1186,7 +1217,7 @@ export default function OrdersScreen({
       name: o.items && o.items.length > 0 ? o.items.map((i: any) => i.name).join(', ') : (o.product_details || o.name || 'Order Item'),
       dateTime: o.appointment_slot || (o.createdAt ? new Date(o.createdAt).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true }) : 'Just now'),
       amount: `₹${Number(o.finalAmount ?? o.totalAmount ?? o.amount ?? 0).toLocaleString('en-IN')}`,
-      status: o.status || 'Pending',
+      status: orderStatus,
       paymentStatus: payStatus,
       paymentMethod: payMethod,
       quantity: totalQty,
@@ -1247,25 +1278,26 @@ export default function OrdersScreen({
       payStatus = 'Payment Pending';
     }
 
-    // Stay properties
+    // Stay properties - ensure strictly Stay accommodation name, never picking unrelated service names
+    const isExplicitStay = bookingCat === 'Stay' || o.category === 'Stay' || o.businessType === 'Stay';
     const propName = o.hotelName ||
-      o.propertyDetails?.propertyName ||
       o.propertyName ||
+      o.propertyDetails?.propertyName ||
       o.propertyDetails?.name ||
+      o.staySchedule?.hotelName ||
       o.items?.[0]?.hotelName ||
       o.items?.[0]?.propertyName ||
-      o.items?.[0]?.name ||
-      (o.product_details && !o.product_details.toLowerCase().includes('service') ? o.product_details.split(/[•·-]/)[0].trim() : '') ||
-      o.businessName ||
-      'Stay Property';
+      (o.items && (o.items[0]?.category === 'Stay' || o.items[0]?.mainCategory === 'Stay') ? o.items[0]?.name : '') ||
+      (isExplicitStay && o.businessName && !/\b(service|services|consulting|agency|transport)\b/i.test(o.businessName) ? o.businessName : '') ||
+      'Stay Accommodation';
+
     const roomName = o.roomDetails?.name ||
       o.roomName ||
       o.roomType ||
       o.items?.[0]?.variant ||
       o.items?.[0]?.roomType ||
-      (o.items && o.items[0]?.name && o.items[0]?.name !== propName ? o.items[0]?.name : '') ||
-      (o.product_details && o.product_details.includes(' - ') ? o.product_details.split(' - ')[1]?.trim() : '') ||
-      'Deluxe Room';
+      (o.items && (o.items[0]?.category === 'Stay' || o.items[0]?.mainCategory === 'Stay') && o.items[0]?.name !== propName ? o.items[0]?.name : '') ||
+      'Standard Room';
 
     if (bookingCat === 'Stay') {
       resolvedServiceName = propName;
@@ -1309,7 +1341,10 @@ export default function OrdersScreen({
     const finalServiceDate = (sDate && sDate !== 'Not provided') ? sDate : (o.createdAt ? new Date(o.createdAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : 'On-Demand Service');
     const finalServiceTime = (sTime && sTime !== 'Standard Slot') ? sTime : 'On-Demand / Flexible';
 
-    const cleanLocation = resolveCustomerLocation(o) || (bPoint && dPoint ? `${bPoint} to ${dPoint}` : '');
+    const rawLocation = bookingCat === 'Stay'
+      ? (o.propertyDetails?.address || o.hotelAddress || o.propertyAddress || o.location || resolveCustomerLocation(o) || 'Property Location Provided')
+      : (resolveCustomerLocation(o) || (bPoint && dPoint ? `${bPoint} to ${dPoint}` : ''));
+    const cleanLocation = sanitizeCustomerAddress(rawLocation);
 
     return {
       id: o.order_number || o.id || o._id,
@@ -3071,13 +3106,13 @@ export default function OrdersScreen({
                         Update Application Stage
                       </Text>
                       {/* Primary 3 Action Buttons */}
-                      <View style={tw`flex-row gap-x-2`}>
+                      <View style={tw`flex-row gap-x-2 items-center`}>
                         {/* 1. Reviewed */}
                         <TouchableOpacity
                           onPress={() => handleStatusTransition(selectedOrder.dbId || selectedOrder.id, 'Reviewed')}
                           activeOpacity={0.8}
                           style={[
-                            tw`flex-1 py-3 px-1 rounded-2xl items-center justify-center border`,
+                            tw`flex-1 py-2.5 px-1 rounded-xl items-center justify-center border min-h-[44px]`,
                             selectedOrder.status === 'Reviewed'
                               ? tw`bg-amber-500 border-amber-600 shadow-sm`
                               : isDark
@@ -3087,7 +3122,7 @@ export default function OrdersScreen({
                           <Text
                             numberOfLines={1}
                             style={[
-                              tw`font-bold text-xs`,
+                              tw`font-bold text-xs text-center`,
                               selectedOrder.status === 'Reviewed'
                                 ? tw`text-white`
                                 : tw`text-amber-800 dark:text-amber-300`,
@@ -3101,7 +3136,7 @@ export default function OrdersScreen({
                           onPress={() => handleStatusTransition(selectedOrder.dbId || selectedOrder.id, 'Shortlisted')}
                           activeOpacity={0.8}
                           style={[
-                            tw`flex-1 py-3 px-1 rounded-2xl items-center justify-center border`,
+                            tw`flex-1 py-2.5 px-1 rounded-xl items-center justify-center border min-h-[44px]`,
                             selectedOrder.status === 'Shortlisted'
                               ? tw`bg-emerald-600 border-emerald-700 shadow-sm`
                               : isDark
@@ -3111,7 +3146,7 @@ export default function OrdersScreen({
                           <Text
                             numberOfLines={1}
                             style={[
-                              tw`font-bold text-xs`,
+                              tw`font-bold text-xs text-center`,
                               selectedOrder.status === 'Shortlisted'
                                 ? tw`text-white`
                                 : tw`text-emerald-800 dark:text-emerald-300`,
@@ -3125,7 +3160,7 @@ export default function OrdersScreen({
                           onPress={() => handleStatusTransition(selectedOrder.dbId || selectedOrder.id, 'Interview Scheduled')}
                           activeOpacity={0.8}
                           style={[
-                            tw`flex-1 py-3 px-1 rounded-2xl items-center justify-center border`,
+                            tw`flex-1 py-2.5 px-1 rounded-xl items-center justify-center border min-h-[44px]`,
                             selectedOrder.status === 'Interview Scheduled' || selectedOrder.status === 'Interviewing'
                               ? tw`bg-purple-600 border-purple-700 shadow-sm`
                               : isDark
@@ -3135,14 +3170,14 @@ export default function OrdersScreen({
                           <Text
                             numberOfLines={1}
                             style={[
-                              tw`font-bold text-[11px] text-center`,
+                              tw`font-bold text-xs text-center`,
                               selectedOrder.status === 'Interview Scheduled' || selectedOrder.status === 'Interviewing'
                                 ? tw`text-white`
                                 : tw`text-purple-800 dark:text-purple-300`,
                             ]}>
                             {selectedOrder.status === 'Interview Scheduled' || selectedOrder.status === 'Interviewing'
                               ? '✓ Scheduled'
-                              : 'Schedule Interview'}
+                              : 'Interview'}
                           </Text>
                         </TouchableOpacity>
                       </View>
@@ -3437,37 +3472,37 @@ export default function OrdersScreen({
                     ) : null}
                   </View>
 
-                  {/* Stay Specific Details */}
-                  {Boolean(raw.category === 'Stay' || raw.type === 'Stay' || raw.roomNumber || raw.hotelName || raw.checkInDate) && (
+                  {/* Stay Specific Details - strictly for Stay category bookings */}
+                  {selectedBooking.bookingCategory === 'Stay' && (
                     <View style={[tw`rounded-2xl p-4 border mt-4`, isDark ? tw`bg-zinc-950 border-zinc-850` : tw`bg-white border-gray-100`]}>
                       <Text style={[tw`font-bold text-xs uppercase tracking-wider mb-3`, isDark ? tw`text-zinc-500` : tw`text-gray-400`]}>
                         Stay Schedule & Property Details
                       </Text>
                       <View style={[tw`p-3 rounded-xl mb-3`, isDark ? tw`bg-zinc-900` : tw`bg-purple-50/50`]}>
                         <Text style={[tw`text-xs font-extrabold mb-1`, isDark ? tw`text-purple-300` : tw`text-purple-900`]}>
-                          {raw.hotelName || raw.propertyName || (raw.items && raw.items[0]?.name) || selectedBooking.propertyName || selectedBooking.serviceName || 'Stay Property'}
+                          {raw.hotelName || raw.propertyName || selectedBooking.propertyName || 'Stay Accommodation'}
                         </Text>
                         <Text style={[tw`text-[11px]`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>
                           {raw.roomsCount || 1} {raw.roomsCount === 1 ? 'Room' : 'Rooms'} • {raw.nightsCount || 1} {raw.nightsCount === 1 ? 'Night' : 'Nights'} • {raw.guests || raw.numberOfGuests || 1} Guest(s)
                         </Text>
                       </View>
-                      <View style={tw`grid grid-cols-2 gap-2`}>
-                        <View style={[tw`p-2.5 rounded-xl border`, isDark ? tw`bg-zinc-900 border-zinc-800` : tw`bg-emerald-50/50 border-emerald-100`]}>
+                      <View style={tw`flex-row gap-2`}>
+                        <View style={[tw`flex-1 p-2.5 rounded-xl border`, isDark ? tw`bg-zinc-900 border-zinc-800` : tw`bg-emerald-50/50 border-emerald-100`]}>
                           <Text style={tw`text-[10px] font-bold uppercase text-emerald-600`}>Check-In</Text>
                           <Text style={[tw`text-xs font-bold mt-0.5`, isDark ? tw`text-white` : tw`text-gray-800`]}>
-                            {raw.checkInDate || raw.scheduledCheckInDate || 'Scheduled'}
+                            {raw.checkInDate || raw.scheduledCheckInDate || selectedBooking.checkInDate || 'Scheduled'}
                           </Text>
                           <Text style={tw`text-[10px] text-gray-400`}>
-                            {raw.checkInTime || raw.scheduledCheckInTime || '12:00 PM'}
+                            {raw.checkInTime || raw.scheduledCheckInTime || selectedBooking.checkInTime || '12:00 PM'}
                           </Text>
                         </View>
-                        <View style={[tw`p-2.5 rounded-xl border mt-2`, isDark ? tw`bg-zinc-900 border-zinc-800` : tw`bg-amber-50/50 border-amber-100`]}>
+                        <View style={[tw`flex-1 p-2.5 rounded-xl border`, isDark ? tw`bg-zinc-900 border-zinc-800` : tw`bg-amber-50/50 border-amber-100`]}>
                           <Text style={tw`text-[10px] font-bold uppercase text-amber-600`}>Check-Out</Text>
                           <Text style={[tw`text-xs font-bold mt-0.5`, isDark ? tw`text-white` : tw`text-gray-800`]}>
-                            {raw.checkOutDate || raw.scheduledCheckOutDate || 'Scheduled'}
+                            {raw.checkOutDate || raw.scheduledCheckOutDate || selectedBooking.checkOutDate || 'Scheduled'}
                           </Text>
                           <Text style={tw`text-[10px] text-gray-400`}>
-                            {raw.checkOutTime || raw.scheduledCheckOutTime || '11:00 AM'}
+                            {raw.checkOutTime || raw.scheduledCheckOutTime || selectedBooking.checkOutTime || '11:00 AM'}
                           </Text>
                         </View>
                       </View>
@@ -3475,7 +3510,7 @@ export default function OrdersScreen({
                   )}
 
                   {/* Service Specific Details */}
-                  {!isBus && Boolean(raw.category === 'Services' || raw.doctorName || raw.appointmentDate) && (
+                  {!isBus && (selectedBooking.bookingCategory === 'Services' || (!['Stay', 'Travel'].includes(selectedBooking.bookingCategory) && Boolean(raw.category === 'Services' || raw.doctorName || raw.appointmentDate))) && (
                     <View style={[tw`rounded-2xl p-4 border mt-4`, isDark ? tw`bg-zinc-950 border-zinc-850` : tw`bg-white border-gray-100`]}>
                       <Text style={[tw`font-bold text-xs uppercase tracking-wider mb-2`, isDark ? tw`text-zinc-500` : tw`text-gray-400`]}>
                         Service Appointment Schedule

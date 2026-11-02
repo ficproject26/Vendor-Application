@@ -356,7 +356,7 @@ export default function HomeScreen({
     },
     {
       label: 'Customer Rating',
-      value: ratingsData.totalRatings > 0 ? `${ratingsData.averageRating.toFixed(1)} ★` : '5.0 ★',
+      value: ratingsData.totalRatings > 0 ? ratingsData.averageRating.toFixed(1) : '5.0',
       change: ratingsData.totalRatings > 0 ? `${ratingsData.totalRatings} Reviews` : 'Verified Feedback',
       icon: Star,
       color: '#F59E0B',
@@ -372,6 +372,25 @@ export default function HomeScreen({
   // Drawer States
   const [isDrawerVisible, setIsDrawerVisible] = useState(false);
   const [storeOpen, setStoreOpen] = useState(true);
+
+  // Load and sync store status
+  useEffect(() => {
+    sessionManager.getVendorCache(vendorId, 'store_open_status').then(saved => {
+      if (saved !== null && saved !== undefined) {
+        setStoreOpen(Boolean(saved));
+      }
+    }).catch(() => {});
+  }, [vendorId]);
+
+  const handleToggleStoreStatus = async (val: boolean) => {
+    setStoreOpen(val);
+    try {
+      await sessionManager.saveVendorCache(vendorId, 'store_open_status', val);
+      await updateOrderStatus('store_status', val ? 'Open' : 'Closed').catch(() => {});
+    } catch (e) {
+      console.warn('[HomeScreen] Store status toggle error:', e);
+    }
+  };
   const slideAnim = useRef(new Animated.Value(-screenWidth)).current;
 
   const [isCustomersVisible, setIsCustomersVisible] = useState(false);
@@ -583,10 +602,8 @@ export default function HomeScreen({
   const activeCategories = baseCategories
     .map(cat => {
       const matchingBusinesses = (activeUser?.businesses || []).filter((b: any) => {
-        const normType = normalizeCategory(b?.vendorType);
-        const normCat = normalizeCategory(b?.category);
-        const normBase = normalizeCategory(b?.baseVendorType);
-        return normType === cat.key || normCat === cat.key || normBase === cat.key;
+        const outletType = normalizeCategory(b?.vendorType) || normalizeCategory(b?.category) || normalizeCategory(b?.baseVendorType);
+        return outletType === cat.key;
       });
 
       const matchingBizIds = new Set(
@@ -595,21 +612,17 @@ export default function HomeScreen({
 
       const count = safeItems.filter(item => {
         if (!item) return false;
-        const itCatNorm = normalizeCategory(item.category || item.type || item.vendorType);
-        const itBizId = String(item.businessId || '');
-        const itVendorId = String(item.vendorId || '');
+        const itCatNorm = normalizeCategory(item.category || item.type || item.vendorType || (item as any).mainCategory);
 
-        // Match 1: businessId or vendorId matches outlet ID
-        if (itBizId && matchingBizIds.has(itBizId)) return true;
-        if (itVendorId && matchingBizIds.has(itVendorId)) return true;
-
-        // Match 2: Category normalized match
-        if (itCatNorm === cat.key) {
-          // If no specific businessId on item, or matches user id
-          if (!itBizId || itBizId === String(activeUser?._id || '') || itVendorId === String(activeUser?._id || '')) {
-            return true;
-          }
+        // Priority 1: Item's own explicit category
+        if (itCatNorm && ['Food', 'Stay', 'Travel', 'Jobs', 'Services'].includes(itCatNorm)) {
+          return itCatNorm === cat.key;
         }
+
+        // Priority 2: Fallback to matching outlet
+        const itBizId = String(item.businessId || '');
+        if (itBizId && matchingBizIds.has(itBizId)) return true;
+
         return false;
       }).length;
 
@@ -733,6 +746,21 @@ export default function HomeScreen({
           </View>
         </View>
 
+        {/* Store Closed Banner (Issue 23) */}
+        {!storeOpen && (
+          <View style={[tw`mx-5 mt-4 p-3.5 rounded-2xl flex-row items-center border`, isDark ? tw`bg-red-950/40 border-red-800` : tw`bg-red-50 border-red-200`]}>
+            <View style={tw`w-2.5 h-2.5 rounded-full bg-red-600 mr-2.5`} />
+            <View style={tw`flex-1`}>
+              <Text style={[tw`font-bold text-xs`, isDark ? tw`text-red-400` : tw`text-red-800`]}>
+                Store is currently Closed
+              </Text>
+              <Text style={[tw`text-[11px] mt-0.5`, isDark ? tw`text-red-300` : tw`text-red-600`]}>
+                Customers cannot place new orders until you turn the store toggle back on.
+              </Text>
+            </View>
+          </View>
+        )}
+
         {/* Stats Cards Grid */}
         <View style={tw`flex-row flex-wrap justify-between mx-5 mt-5`}>
           {statsData.map(stat => {
@@ -805,7 +833,7 @@ export default function HomeScreen({
                       isDark ? tw`text-white` : tw`text-gray-900`,
                     ]}
                     numberOfLines={1}>
-                    {stat.value}
+                    {stat.isStar ? String(stat.value).replace(/[^0-9.]/g, '') : stat.value}
                   </Text>
                   {stat.isStar && (
                     <Star
@@ -962,7 +990,9 @@ export default function HomeScreen({
               </View>
             ) : (
               safeItems.slice(0, 5).map((prod: any, index: number, arr: any[]) => {
-                const isJob = String(prod.category || '').toLowerCase().includes('job');
+                const catNorm = normalizeCategory(prod.category || prod.vendorType || prod.type);
+                const isJob = catNorm === 'Jobs' || String(prod.category || '').toLowerCase().includes('job');
+                const displayCategory = isJob ? 'Job Opening' : (catNorm || prod.category || 'Product');
                 return (
                   <View
                     key={prod.id || prod._id || index}
@@ -983,13 +1013,20 @@ export default function HomeScreen({
                       </Text>
                       <View style={tw`flex-row items-center mt-1`}>
                         <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-indigo-400` : tw`text-indigo-650`]}>
-                          {prod.category || 'Product'}
+                          {displayCategory}
                         </Text>
-                        {prod.stock !== undefined ? (
+                        {prod.stock !== undefined && prod.stock !== null ? (
                           <>
                             <View style={[tw`w-1 h-1 rounded-full mx-2`, isDark ? tw`bg-zinc-700` : tw`bg-gray-300`]} />
                             <Text style={[tw`text-xs font-medium`, isDark ? tw`text-zinc-500` : tw`text-gray-500`]}>
                               {isJob ? `Openings: ${prod.stock}` : `Stock: ${prod.stock}`}
+                            </Text>
+                          </>
+                        ) : isJob && prod.openings ? (
+                          <>
+                            <View style={[tw`w-1 h-1 rounded-full mx-2`, isDark ? tw`bg-zinc-700` : tw`bg-gray-300`]} />
+                            <Text style={[tw`text-xs font-medium`, isDark ? tw`text-zinc-500` : tw`text-gray-500`]}>
+                              Openings: {prod.openings}
                             </Text>
                           </>
                         ) : null}
@@ -997,8 +1034,10 @@ export default function HomeScreen({
                     </View>
                     <Text style={[tw`font-black text-sm ml-2`, isDark ? tw`text-white` : tw`text-gray-900`]}>
                       {isJob
-                        ? (prod.salary ? `${prod.salary} LPA` : (prod.price ? `${prod.price} LPA` : 'Best in Industry'))
-                        : (prod.price ? (typeof prod.price === 'number' ? `₹${prod.price.toLocaleString('en-IN')}` : String(prod.price).startsWith('₹') ? prod.price : `₹${prod.price}`) : '₹0')}
+                        ? (prod.salary ? `${prod.salary} LPA` : (prod.salaryMin && prod.salaryMax ? `₹${prod.salaryMin}-${prod.salaryMax} LPA` : 'Best in Industry'))
+                        : (prod.price !== undefined && prod.price !== null
+                            ? (typeof prod.price === 'number' ? `₹${prod.price.toLocaleString('en-IN')}` : String(prod.price).startsWith('₹') ? prod.price : `₹${prod.price}`)
+                            : '—')}
                     </Text>
                   </View>
                 );
@@ -1238,7 +1277,7 @@ export default function HomeScreen({
               </View>
               <Switch
                 value={storeOpen}
-                onValueChange={setStoreOpen}
+                onValueChange={handleToggleStoreStatus}
                 trackColor={{ false: '#D1D5DB', true: '#C7D2FE' }}
                 thumbColor={storeOpen ? '#4F46E5' : '#9CA3AF'}
               />
@@ -1399,7 +1438,7 @@ export default function HomeScreen({
             <ScrollView
               contentContainerStyle={tw`px-5 py-2`}
               showsVerticalScrollIndicator={false}>
-              {notifications.filter(n => !n.isRead).length === 0 ? (
+              {notifications.length === 0 ? (
                 <View style={tw`py-12 items-center justify-center`}>
                   <Bell size={48} color="#9CA3AF" style={tw`mb-3`} />
                   <Text style={tw`text-gray-500 font-semibold text-base`}>
@@ -1410,7 +1449,7 @@ export default function HomeScreen({
                   </Text>
                 </View>
               ) : (
-                notifications.filter(n => !n.isRead).map(item => {
+                notifications.map(item => {
                   // Icon mapping based on notification type
                   let IconComponent = Bell;
                   let iconBg = '#F3F4F6';

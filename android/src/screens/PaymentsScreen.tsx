@@ -95,6 +95,39 @@ export default function PaymentsScreen({ isDark = false }: PaymentsScreenProps) 
   const totalApplications = analytics?.applicationsCount ?? (analytics?.totalApplicationsCount || applications.length || 0);
   const totalCustomers = analytics?.customersCount ?? (analytics?.totalCustomersCount || 0);
 
+  const grossRevenue = useMemo(() => {
+    if (analytics?.totalRevenue && analytics.totalRevenue > 0) return analytics.totalRevenue;
+    let sum = 0;
+    (orders || []).forEach((o: any) => {
+      const val = Number(o.totalAmount || o.amount || o.price || 0);
+      if (!isNaN(val)) sum += val;
+    });
+    (bookings || []).forEach((b: any) => {
+      const val = Number(b.totalAmount || b.amount || b.price || 0);
+      if (!isNaN(val)) sum += val;
+    });
+    return sum;
+  }, [analytics, orders, bookings]);
+
+  const settledRevenue = useMemo(() => {
+    let sum = 0;
+    (orders || []).forEach((o: any) => {
+      const status = String(o.orderStatus || o.status || '').toLowerCase();
+      if (status === 'delivered' || status === 'completed') {
+        const val = Number(o.totalAmount || o.amount || o.price || 0);
+        if (!isNaN(val)) sum += val;
+      }
+    });
+    (bookings || []).forEach((b: any) => {
+      const status = String(b.bookingStatus || b.status || '').toLowerCase();
+      if (status === 'completed' || status === 'checked_out') {
+        const val = Number(b.totalAmount || b.amount || b.price || 0);
+        if (!isNaN(val)) sum += val;
+      }
+    });
+    return sum;
+  }, [orders, bookings]);
+
   // Chart data: 7 days or 6 months
   const trendData = useMemo(() => {
     if (selectedPeriod === '6m') {
@@ -206,16 +239,19 @@ export default function PaymentsScreen({ isDark = false }: PaymentsScreenProps) 
               isDark ? tw`bg-zinc-900 border-zinc-800` : tw`bg-white border-gray-100`,
               { width: '48%' },
             ]}>
-            <View style={tw`flex-row justify-between items-start mb-2`}>
+            <View style={tw`flex-row justify-between items-start mb-1`}>
               <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
-                Total Revenue
+                Gross Revenue
               </Text>
               <View style={[tw`w-8 h-8 rounded-xl items-center justify-center`, { backgroundColor: '#EEF2FF' }]}>
                 <ShoppingBag size={18} color="#4F46E5" />
               </View>
             </View>
             <Text style={[tw`font-extrabold text-xl text-emerald-600`]}>
-              ₹{totalRevenue.toLocaleString()}
+              ₹{grossRevenue.toLocaleString()}
+            </Text>
+            <Text style={[tw`text-[10px] mt-1 font-medium`, isDark ? tw`text-zinc-400` : tw`text-gray-400`]}>
+              Settled: ₹{settledRevenue.toLocaleString()}
             </Text>
           </View>
 

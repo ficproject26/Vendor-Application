@@ -91,12 +91,18 @@ async function buildRelease() {
   runCommand(bundleCmd);
   console.log('✅ Offline Release JavaScript bundle compiled successfully.');
 
+  // Clean previous output APK to guarantee fresh packaging
+  const oldApk = path.join(ANDROID_DIR, 'app', 'build', 'outputs', 'apk', 'release', 'app-release.apk');
+  if (fs.existsSync(oldApk)) {
+    try { fs.unlinkSync(oldApk); } catch (e) {}
+  }
+
   // Step 3: Gradle assembleRelease
   console.log('\n--- STEP 3/4: Compiling Release APK via Gradle ---');
   const isWindows = process.platform === 'win32';
   const gradlewCmd = isWindows
-    ? `"${path.join(ANDROID_DIR, 'gradlew.bat')}" assembleRelease`
-    : './gradlew assembleRelease';
+    ? `"${path.join(ANDROID_DIR, 'gradlew.bat')}" assembleRelease --rerun-tasks`
+    : './gradlew assembleRelease --rerun-tasks';
   runCommand(gradlewCmd, ANDROID_DIR);
   console.log('✅ Gradle assembleRelease completed successfully.');
 

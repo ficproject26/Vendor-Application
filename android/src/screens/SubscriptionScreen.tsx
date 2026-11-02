@@ -285,10 +285,10 @@ export default function SubscriptionScreen({
           {/* 1. Total Expenses */}
           <View
             style={[
-              tw`w-[48%] p-3.5 rounded-2xl border mb-3`,
+              tw`w-[48%] p-3.5 rounded-2xl border mb-3 h-[88px] justify-between`,
               isDark ? tw`bg-zinc-900 border-zinc-800` : tw`bg-white border-gray-100`,
             ]}>
-            <View style={tw`flex-row items-center justify-between mb-2`}>
+            <View style={tw`flex-row items-center justify-between`}>
               <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
                 Total Expenses
               </Text>
@@ -302,10 +302,10 @@ export default function SubscriptionScreen({
           {/* 2. Active Plans */}
           <View
             style={[
-              tw`w-[48%] p-3.5 rounded-2xl border mb-3`,
+              tw`w-[48%] p-3.5 rounded-2xl border mb-3 h-[88px] justify-between`,
               isDark ? tw`bg-zinc-900 border-zinc-800` : tw`bg-white border-gray-100`,
             ]}>
-            <View style={tw`flex-row items-center justify-between mb-2`}>
+            <View style={tw`flex-row items-center justify-between`}>
               <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
                 Active Plans
               </Text>
@@ -319,10 +319,10 @@ export default function SubscriptionScreen({
           {/* 3. Renewal Due */}
           <View
             style={[
-              tw`w-[48%] p-3.5 rounded-2xl border`,
+              tw`w-[48%] p-3.5 rounded-2xl border h-[88px] justify-between`,
               isDark ? tw`bg-zinc-900 border-zinc-800` : tw`bg-white border-gray-100`,
             ]}>
-            <View style={tw`flex-row items-center justify-between mb-2`}>
+            <View style={tw`flex-row items-center justify-between`}>
               <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
                 Renewal Due
               </Text>
@@ -336,16 +336,16 @@ export default function SubscriptionScreen({
           {/* 4. Next Due Date (Issue 7 Fix) */}
           <View
             style={[
-              tw`w-[48%] p-3.5 rounded-2xl border`,
+              tw`w-[48%] p-3.5 rounded-2xl border h-[88px] justify-between`,
               isDark ? tw`bg-zinc-900 border-zinc-800` : tw`bg-white border-gray-100`,
             ]}>
-            <View style={tw`flex-row items-center justify-between mb-2`}>
+            <View style={tw`flex-row items-center justify-between`}>
               <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]} numberOfLines={1}>
                 Next Due Date
               </Text>
               <Calendar size={16} color="#8B5CF6" />
             </View>
-            <Text style={[tw`text-sm font-extrabold text-purple-600 mt-1`]} numberOfLines={1}>
+            <Text style={[tw`text-sm font-extrabold text-purple-600`]} numberOfLines={1}>
               {summary.nextExpiry
                 ? new Date(summary.nextExpiry).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
                 : 'No Expiring Plans'}

@@ -1127,29 +1127,33 @@ export default function BusinessScreen({
 
         const isJob = newItemCategory === 'Jobs';
 
-        // Future date validation for jobs (Issue 10 fix: robust date comparison avoiding ASCII string ordering bug)
+        // Future date validation for jobs (Issue 9 fix: robust Indian DD/MM/YYYY and ISO date parsing)
         if (isJob && deadlineDate && deadlineDate.trim()) {
           const cleanDeadline = deadlineDate.trim();
           let deadlineTs: number = NaN;
-          if (cleanDeadline.includes('/')) {
-            const parts = cleanDeadline.split('/').map(Number);
-            if (parts.length === 3) {
-              // Format MM/DD/YYYY
-              deadlineTs = new Date(parts[2], parts[0] - 1, parts[1], 23, 59, 59, 999).getTime();
-            }
-          } else if (cleanDeadline.includes('-')) {
-            const parts = cleanDeadline.split('-').map(Number);
-            if (parts.length === 3) {
+
+          if (cleanDeadline.includes('/') || cleanDeadline.includes('-')) {
+            const sep = cleanDeadline.includes('/') ? '/' : '-';
+            const parts = cleanDeadline.split(sep).map(p => Number(p.trim()));
+            if (parts.length === 3 && parts.every(n => !isNaN(n))) {
               if (parts[0] > 1000) {
-                // YYYY-MM-DD
+                // Format: YYYY-MM-DD
                 deadlineTs = new Date(parts[0], parts[1] - 1, parts[2], 23, 59, 59, 999).getTime();
-              } else {
-                // DD-MM-YYYY
-                deadlineTs = new Date(parts[2], parts[1] - 1, parts[0], 23, 59, 59, 999).getTime();
+              } else if (parts[2] > 1000) {
+                // Standard Indian format: DD/MM/YYYY or DD-MM-YYYY
+                const day = parts[0];
+                const month = parts[1] - 1; // 0-indexed month
+                const year = parts[2];
+                deadlineTs = new Date(year, month, day, 23, 59, 59, 999).getTime();
               }
             }
-          } else {
-            deadlineTs = new Date(cleanDeadline).getTime();
+          }
+
+          if (isNaN(deadlineTs)) {
+            const parsed = new Date(cleanDeadline);
+            if (!isNaN(parsed.getTime())) {
+              deadlineTs = new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate(), 23, 59, 59, 999).getTime();
+            }
           }
 
           const now = new Date();
@@ -1369,7 +1373,8 @@ export default function BusinessScreen({
     }
     resetAllItemFormStates();
     setModalType('item');
-    const defaultCat = selectedCategory || 'Products';
+    const currentOutlet = currentUser?.businesses?.find((b: any) => (b._id || b.id) === (activeBizId || getActiveBusinessId()));
+    const defaultCat = normalizeCategory(selectedCategory || currentOutlet?.vendorType || currentOutlet?.category || 'Products');
     setNewItemCategory(defaultCat);
     loadDynamicHierarchy(defaultCat);
     const catHierarchy = getHierarchyForCat(defaultCat);
@@ -1397,7 +1402,9 @@ export default function BusinessScreen({
     setNewItemPrice(item.price ? String(item.price).replace(/[^\d]/g, '') : '');
     setNewItemOriginalPrice(item.originalPrice ? String(item.originalPrice).replace(/[^\d]/g, '') : '');
 
-    setNewItemCategory(item.category);
+    const normItemCat = normalizeCategory(item.category || (item as any).mainCategory || selectedCategory);
+    setNewItemCategory(normItemCat);
+    loadDynamicHierarchy(normItemCat);
     setNewItemSubCategory(item.subCategory || 'General');
     setNewItemItemType(item.itemType || '');
     setNewItemUnit(item.unit || 'count');
@@ -2385,7 +2392,7 @@ export default function BusinessScreen({
                             ⏰ {item.departureTime || item.boardingTime || '21:30'} ➔ {item.arrivalTime || '05:30'} • {item.duration || item.busSchedule || '8h 00m'}
                           </Text>
                         </View>
-                      ) : (item.category === 'Jobs' || (item.category as string) === 'Job' || selectedCategory === 'Jobs') ? (
+                      ) : (item.category === 'Jobs' || (item.category as string) === 'Job') ? (
                         <View style={tw`mt-1.5`}>
                           <View style={tw`flex-row flex-wrap items-center gap-1.5 mb-1`}>
                             {item.jobType ? (
@@ -2413,6 +2420,35 @@ export default function BusinessScreen({
                             <Text style={[tw`text-[10px] font-bold`, isDark ? tw`text-amber-400` : tw`text-amber-700`]}>
                               📅 Apply by: {item.deadlineDate}
                             </Text>
+                          ) : null}
+                        </View>
+                      ) : item.category === 'Food' ? (
+                        <View style={tw`mt-1.5`}>
+                          <View style={tw`flex-row items-center gap-2 mb-1`}>
+                            <View style={[tw`px-2 py-0.5 rounded-md`, item.foodType === 'Non-Veg' ? tw`bg-rose-50 dark:bg-rose-950` : tw`bg-emerald-50 dark:bg-emerald-950`]}>
+                              <Text style={[tw`text-[10px] font-bold`, item.foodType === 'Non-Veg' ? tw`text-rose-600 dark:text-rose-300` : tw`text-emerald-600 dark:text-emerald-300`]}>
+                                {item.foodType === 'Non-Veg' ? '🔴 Non-Veg' : '🟢 Veg'}
+                              </Text>
+                            </View>
+                            {item.subCategory ? (
+                              <Text style={[tw`text-[11px] font-medium`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
+                                {item.subCategory}
+                              </Text>
+                            ) : null}
+                          </View>
+                          {item.detail ? (
+                            <Text style={[tw`text-xs mt-0.5`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]} numberOfLines={1}>
+                              {item.detail}
+                            </Text>
+                          ) : null}
+                        </View>
+                      ) : item.category === 'Stay' ? (
+                        <View style={tw`mt-1.5`}>
+                          <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-purple-300` : tw`text-purple-700`]}>
+                            🛏️ {item.roomClass || 'Deluxe Room'} • {item.bedType || 'King Bed'}
+                          </Text>
+                          {item.stayCity ? (
+                            <Text style={[tw`text-[11px] text-gray-500 mt-0.5`]}>📍 {item.stayCity}</Text>
                           ) : null}
                         </View>
                       ) : (
@@ -3643,9 +3679,10 @@ export default function BusinessScreen({
                         isDark ? tw`bg-zinc-950 border-zinc-700 text-white` : tw`bg-gray-50 border-gray-200 text-gray-800`,
                       ]}
                       value={newItemPinCode}
-                      onChangeText={setNewItemPinCode}
+                      onChangeText={(val) => setNewItemPinCode(val.replace(/[^0-9]/g, '').slice(0, 6))}
                       placeholder="e.g. 600001"
                       keyboardType="numeric"
+                      maxLength={6}
                       placeholderTextColor={isDark ? '#52525b' : '#9CA3AF'}
                     />
                   </View>

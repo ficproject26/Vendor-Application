@@ -102,8 +102,8 @@ export default function NewActivityModal({
   );
 
   const isStayBooking = isBooking && !isServiceBooking && !isTravelBooking && (
-    Boolean(raw.roomNumber || raw.roomName || raw.staySchedule || raw.hotelName) ||
-    /\b(room|rooms|hotel|hotels|resort|resorts|suite|villa|cottage|homestay|lodge|pg)\b/i.test(detailStr) ||
+    Boolean(raw.roomNumber || raw.roomName || raw.staySchedule || raw.hotelName || raw.propertyName) ||
+    /\b(hotel|hotels|resort|resorts|suite|villa|cottage|homestay|lodge|pg)\b/i.test(detailStr) ||
     ['stay', 'hotel', 'resort'].includes(rawCat) ||
     ['stay', 'hotel', 'resort'].includes(rawType)
   );
@@ -149,7 +149,11 @@ export default function NewActivityModal({
   const customerId = raw.customer_id || raw.customerId || raw.memberId || '';
 
   const dateTimeStr = notification.dateTime || (raw.createdAt ? new Date(raw.createdAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : 'Just now');
-  const statusStr = raw.status || notification.status || 'Received';
+  const rawStatus = raw.status || notification.status || 'Received';
+  let statusStr = rawStatus;
+  if ((isFoodOrder || isDailyNeedsOrder || isOrder) && rawStatus === 'Booking Received') {
+    statusStr = 'Order Received';
+  }
 
   // Helper to parse numeric price reliably without formatting corruption
   const resolveNumericPrice = (val: any): number => {
@@ -200,8 +204,20 @@ export default function NewActivityModal({
     paymentStatus = 'Payment Pending';
   }
 
-  // Location / Address
+  // Location / Address with intelligent state correction
   const getDeliveryAddress = (): string => {
+    const sanitizeStateInAddr = (str: string): string => {
+      if (!str) return str;
+      let s = str.trim();
+      // If address contains Tamil Nadu districts or 60xxxx-64xxxx pincodes with 'Karnataka'
+      const isTN = /\b(dharmapuri|harur|salem|chennai|coimbatore|madurai|trichy|tiruchirappalli|tiruppur|erode|vellore|kanchipuram|hosur|krishnagiri|thanjavur|dindigul|cuddalore|tirunelveli|tuticorin|thoothukudi)\b/i.test(s) ||
+                   /\b6[0-4][0-9]{4}\b/.test(s);
+      if (isTN && /karnataka/i.test(s)) {
+        s = s.replace(/\bkarnataka\b/gi, 'Tamil Nadu');
+      }
+      return s;
+    };
+
     // Check for dine-in table or room delivery first
     if (raw.tableNumber || raw.table_number) {
       return `Dine-in: Table #${raw.tableNumber || raw.table_number}`;
@@ -226,14 +242,14 @@ export default function NewActivityModal({
     for (const f of directFields) {
       if (f && typeof f === 'object') {
         const parts = [f.street, f.area, f.landmark, f.city, f.district, f.state, f.pincode].filter(Boolean);
-        if (parts.length > 0) return parts.join(', ');
+        if (parts.length > 0) return sanitizeStateInAddr(parts.join(', '));
       }
       if (typeof f === 'string' && f.trim() && f !== 'N/A' && f !== '[object Object]') {
-        return f.trim();
+        return sanitizeStateInAddr(f.trim());
       }
     }
     if (raw.city || raw.pincode) {
-      return [raw.area, raw.city, raw.state, raw.pincode].filter(Boolean).join(', ');
+      return sanitizeStateInAddr([raw.area, raw.city, raw.state, raw.pincode].filter(Boolean).join(', '));
     }
     return 'Delivery Address Provided with Order';
   };
@@ -392,11 +408,13 @@ export default function NewActivityModal({
                 isDark ? tw`bg-zinc-900 border-zinc-800` : tw`bg-white border-gray-100`,
               ]}>
               <Text style={[tw`text-[10px] font-bold uppercase tracking-wider mb-2`, isDark ? tw`text-zinc-400` : tw`text-gray-400`]}>
-                2. Transaction Details
+                {isJob ? '2. Application Details' : isBooking ? '2. Booking Details' : '2. Transaction Details'}
               </Text>
               <View style={tw`flex-row justify-between items-center mb-1`}>
-                <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>Transaction ID:</Text>
-                <Text style={[tw`text-xs font-extrabold font-mono`, isDark ? tw`text-white` : tw`text-gray-900`]}>#{txId}</Text>
+                <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
+                  {isJob ? 'Application ID:' : isBooking ? 'Booking ID:' : 'Order ID:'}
+                </Text>
+                <Text style={[tw`text-xs font-extrabold font-mono`, isDark ? tw`text-white` : tw`text-gray-900`]}>#{txId.replace(/^#+/, '')}</Text>
               </View>
               <View style={tw`flex-row justify-between items-center mb-1`}>
                 <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>Category:</Text>
