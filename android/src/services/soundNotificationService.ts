@@ -303,6 +303,43 @@ class SoundNotificationService {
   }
 
   /**
+   * Sync vendor credentials to native SharedPreferences for background polling
+   */
+  syncVendorSession(vendorId: string, token: string, apiUrl: string, businessIdsJson?: string) {
+    try {
+      if (OrderAlertModule && typeof OrderAlertModule.syncVendorSession === 'function') {
+        OrderAlertModule.syncVendorSession(vendorId, token, apiUrl, businessIdsJson || null);
+      }
+    } catch (e: any) {
+      console.warn('[SoundNotificationService] syncVendorSession notice:', e?.message);
+    }
+  }
+
+  /**
+   * Clear vendor credentials from native SharedPreferences
+   */
+  clearVendorSession() {
+    try {
+      if (OrderAlertModule && typeof OrderAlertModule.clearVendorSession === 'function') {
+        OrderAlertModule.clearVendorSession();
+      }
+    } catch (e: any) {
+      console.warn('[SoundNotificationService] clearVendorSession notice:', e?.message);
+    }
+  }
+
+  /**
+   * Mark an order as handled in native memory so background poller does not repeat
+   */
+  markOrderHandled(orderId: string) {
+    try {
+      if (OrderAlertModule && typeof OrderAlertModule.markOrderHandled === 'function') {
+        OrderAlertModule.markOrderHandled(orderId);
+      }
+    } catch (e: any) {}
+  }
+
+  /**
    * Start native background keep-alive service to receive orders while minimized
    */
   startKeepAliveService() {

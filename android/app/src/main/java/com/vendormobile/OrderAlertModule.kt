@@ -34,6 +34,12 @@ class OrderAlertModule(private val reactContext: ReactApplicationContext) :
     private var stopRunnable: Runnable? = null
 
     companion object {
+        const val PREFS_NAME = "VendorMobilePrefs"
+        const val KEY_VENDOR_ID = "vendor_id"
+        const val KEY_AUTH_TOKEN = "auth_token"
+        const val KEY_API_URL = "api_url"
+        const val KEY_BUSINESS_IDS = "business_ids"
+
         const val PRIMARY_CHANNEL_ID = "vendor_order_alerts_v2"
         const val PRIMARY_CHANNEL_NAME = "Vendor Order & Booking Alerts"
 
@@ -44,6 +50,137 @@ class OrderAlertModule(private val reactContext: ReactApplicationContext) :
 
         private var instance: OrderAlertModule? = null
         var initialNotificationData: WritableMap? = null
+
+        fun getCustomSoundUri(context: Context): Uri {
+            return try {
+                val resId = context.resources.getIdentifier("vendor_alert", "raw", context.packageName)
+                if (resId != 0) {
+                    Uri.parse("android.resource://${context.packageName}/$resId")
+                } else {
+                    val notifResId = context.resources.getIdentifier("notification_sound", "raw", context.packageName)
+                    if (notifResId != 0) {
+                        Uri.parse("android.resource://${context.packageName}/$notifResId")
+                    } else {
+                        RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+                    }
+                }
+            } catch (e: Exception) {
+                RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+            }
+        }
+
+        fun initNotificationChannels(context: Context) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                try {
+                    val notificationManager =
+                        context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+                    val soundUri = getCustomSoundUri(context)
+                    val audioAttributes = AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+
+                    val primaryChannel = NotificationChannel(
+                        PRIMARY_CHANNEL_ID,
+                        PRIMARY_CHANNEL_NAME,
+                        NotificationManager.IMPORTANCE_HIGH
+                    ).apply {
+                        description = "High-priority notifications for new orders, bookings, and job applications"
+                        enableVibration(true)
+                        vibrationPattern = longArrayOf(0, 400, 200, 400)
+                        setSound(soundUri, audioAttributes)
+                        lockscreenVisibility = NotificationCompat.VISIBILITY_PUBLIC
+                        setShowBadge(true)
+                    }
+
+                    val updatesChannel = NotificationChannel(
+                        UPDATES_CHANNEL_ID,
+                        UPDATES_CHANNEL_NAME,
+                        NotificationManager.IMPORTANCE_HIGH
+                    ).apply {
+                        description = "Real-time updates for order status, payment confirmations, and booking changes"
+                        enableVibration(true)
+                        vibrationPattern = longArrayOf(0, 300, 150, 300)
+                        setSound(soundUri, audioAttributes)
+                        lockscreenVisibility = NotificationCompat.VISIBILITY_PUBLIC
+                        setShowBadge(true)
+                    }
+
+                    notificationManager.createNotificationChannel(primaryChannel)
+                    notificationManager.createNotificationChannel(updatesChannel)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        }
+
+        fun postSystemNotification(
+            context: Context,
+            title: String,
+            message: String,
+            targetId: String,
+            category: String,
+            segment: String
+        ) {
+            try {
+                initNotificationChannels(context)
+
+                val notificationManager =
+                    context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+                val isStatusUpdate = title.contains("Status", true) || title.contains("Updated", true)
+                val channelId = if (isStatusUpdate) UPDATES_CHANNEL_ID else PRIMARY_CHANNEL_ID
+
+                val launchIntent = Intent(context, MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                    putExtra("targetId", targetId)
+                    putExtra("orderId", targetId)
+                    putExtra("category", category)
+                    putExtra("segment", segment)
+                    action = "OPEN_NOTIFICATION"
+                }
+
+                val requestCode = ((System.currentTimeMillis() + targetId.hashCode()) % 100000).toInt().let { if (it < 0) -it else it }
+                val pendingIntent = PendingIntent.getActivity(
+                    context,
+                    requestCode,
+                    launchIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
+                )
+
+                // Resolve robust valid application icon
+                val smallIconResId = context.applicationInfo.icon.let {
+                    if (it != 0) it else R.mipmap.ic_launcher
+                }
+
+                val soundUri = getCustomSoundUri(context)
+
+                val builder = NotificationCompat.Builder(context, channelId)
+                    .setSmallIcon(smallIconResId)
+                    .setContentTitle(title)
+                    .setContentText(message)
+                    .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+                    .setPriority(NotificationCompat.PRIORITY_MAX)
+                    .setCategory(NotificationCompat.CATEGORY_EVENT)
+                    .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                    .setAutoCancel(true)
+                    .setSound(soundUri)
+                    .setContentIntent(pendingIntent)
+                    .setVibrate(longArrayOf(0, 400, 200, 400))
+                    .setDefaults(NotificationCompat.DEFAULT_LIGHTS or NotificationCompat.DEFAULT_VIBRATE)
+
+                val notificationId = ((System.currentTimeMillis() + title.hashCode() + targetId.hashCode()) % 100000).toInt().let {
+                    if (it < 0) -it else it
+                }
+                notificationManager.notify(notificationId, builder.build())
+
+                // Mark order handled to prevent duplicate background notifications
+                VendorKeepAliveService.markOrderHandled(targetId)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
 
         fun handleNotificationIntent(intent: Intent?) {
             if (intent == null) return
@@ -85,7 +222,7 @@ class OrderAlertModule(private val reactContext: ReactApplicationContext) :
     init {
         instance = this
         try {
-            initNotificationChannels()
+            initNotificationChannels(reactContext)
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -93,69 +230,9 @@ class OrderAlertModule(private val reactContext: ReactApplicationContext) :
 
     override fun getName(): String = "OrderAlertModule"
 
-    private fun getCustomSoundUri(): Uri {
-        return try {
-            val resId = reactContext.resources.getIdentifier("vendor_alert", "raw", reactContext.packageName)
-            if (resId != 0) {
-                Uri.parse("android.resource://${reactContext.packageName}/$resId")
-            } else {
-                val notifResId = reactContext.resources.getIdentifier("notification_sound", "raw", reactContext.packageName)
-                if (notifResId != 0) {
-                    Uri.parse("android.resource://${reactContext.packageName}/$notifResId")
-                } else {
-                    RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-                }
-            }
-        } catch (e: Exception) {
-            RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-        }
-    }
+    private fun getCustomSoundUri(): Uri = getCustomSoundUri(reactContext)
 
-    private fun initNotificationChannels() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            try {
-                val notificationManager =
-                    reactContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-
-                val soundUri = getCustomSoundUri()
-                val audioAttributes = AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_NOTIFICATION)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                    .build()
-
-                val primaryChannel = NotificationChannel(
-                    PRIMARY_CHANNEL_ID,
-                    PRIMARY_CHANNEL_NAME,
-                    NotificationManager.IMPORTANCE_HIGH
-                ).apply {
-                    description = "High-priority notifications for new orders, bookings, and job applications"
-                    enableVibration(true)
-                    vibrationPattern = longArrayOf(0, 400, 200, 400)
-                    setSound(soundUri, audioAttributes)
-                    lockscreenVisibility = NotificationCompat.VISIBILITY_PUBLIC
-                    setShowBadge(true)
-                }
-
-                val updatesChannel = NotificationChannel(
-                    UPDATES_CHANNEL_ID,
-                    UPDATES_CHANNEL_NAME,
-                    NotificationManager.IMPORTANCE_HIGH
-                ).apply {
-                    description = "Real-time updates for order status, payment confirmations, and booking changes"
-                    enableVibration(true)
-                    vibrationPattern = longArrayOf(0, 300, 150, 300)
-                    setSound(soundUri, audioAttributes)
-                    lockscreenVisibility = NotificationCompat.VISIBILITY_PUBLIC
-                    setShowBadge(true)
-                }
-
-                notificationManager.createNotificationChannel(primaryChannel)
-                notificationManager.createNotificationChannel(updatesChannel)
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
-    }
+    private fun initNotificationChannels() = initNotificationChannels(reactContext)
 
     @ReactMethod
     fun initializeChannels(promise: Promise) {
@@ -282,60 +359,41 @@ class OrderAlertModule(private val reactContext: ReactApplicationContext) :
         category: String,
         segment: String
     ) {
+        postSystemNotification(reactContext, title, message, targetId, category, segment)
+    }
+
+    @ReactMethod
+    fun syncVendorSession(vendorId: String, token: String, apiUrl: String, businessIdsJson: String?) {
         try {
-            initNotificationChannels()
-
-            val notificationManager =
-                reactContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-
-            val isStatusUpdate = title.contains("Status", true) || title.contains("Updated", true)
-            val channelId = if (isStatusUpdate) UPDATES_CHANNEL_ID else PRIMARY_CHANNEL_ID
-
-            val launchIntent = Intent(reactContext, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                putExtra("targetId", targetId)
-                putExtra("orderId", targetId)
-                putExtra("category", category)
-                putExtra("segment", segment)
-                action = "OPEN_NOTIFICATION"
+            val prefs = reactContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            prefs.edit().apply {
+                putString(KEY_VENDOR_ID, vendorId)
+                putString(KEY_AUTH_TOKEN, token)
+                putString(KEY_API_URL, apiUrl)
+                if (businessIdsJson != null) {
+                    putString(KEY_BUSINESS_IDS, businessIdsJson)
+                }
+                apply()
             }
-
-            val requestCode = ((System.currentTimeMillis() + targetId.hashCode()) % 100000).toInt().let { if (it < 0) -it else it }
-            val pendingIntent = PendingIntent.getActivity(
-                reactContext,
-                requestCode,
-                launchIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
-            )
-
-            // Resolve robust valid application icon
-            val smallIconResId = reactContext.applicationInfo.icon.let {
-                if (it != 0) it else R.mipmap.ic_launcher
-            }
-
-            val soundUri = getCustomSoundUri()
-
-            val builder = NotificationCompat.Builder(reactContext, channelId)
-                .setSmallIcon(smallIconResId)
-                .setContentTitle(title)
-                .setContentText(message)
-                .setStyle(NotificationCompat.BigTextStyle().bigText(message))
-                .setPriority(NotificationCompat.PRIORITY_MAX)
-                .setCategory(NotificationCompat.CATEGORY_EVENT)
-                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                .setAutoCancel(true)
-                .setSound(soundUri)
-                .setContentIntent(pendingIntent)
-                .setVibrate(longArrayOf(0, 400, 200, 400))
-                .setDefaults(NotificationCompat.DEFAULT_LIGHTS or NotificationCompat.DEFAULT_VIBRATE)
-
-            val notificationId = ((System.currentTimeMillis() + title.hashCode() + targetId.hashCode()) % 100000).toInt().let {
-                if (it < 0) -it else it
-            }
-            notificationManager.notify(notificationId, builder.build())
         } catch (e: Exception) {
             e.printStackTrace()
         }
+    }
+
+    @ReactMethod
+    fun clearVendorSession() {
+        try {
+            val prefs = reactContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            prefs.edit().clear().apply()
+            VendorKeepAliveService.knownOrderIds.clear()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    @ReactMethod
+    fun markOrderHandled(orderId: String) {
+        VendorKeepAliveService.markOrderHandled(orderId)
     }
 
     @ReactMethod

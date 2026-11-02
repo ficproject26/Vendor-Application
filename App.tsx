@@ -385,6 +385,7 @@ function App() {
 
   const handleLogout = async () => {
     try {
+      soundNotificationService.clearVendorSession();
       unregisterDeviceToken().catch(() => {});
       soundNotificationService.stopKeepAliveService();
       await logoutVendor();
@@ -615,14 +616,34 @@ function App() {
 
     initNotificationsAndToken();
 
-    // Start background keep-alive service when authenticated
+    // Start background keep-alive service and sync session when authenticated
     if (isLoggedIn) {
+      const user = getVendorUser();
+      const token = getToken();
+      if (user && token) {
+        soundNotificationService.syncVendorSession(
+          user.vendorId || user._id || user.id || '',
+          token,
+          'https://vendor.ficapp.in/api',
+          JSON.stringify(user.businesses || [])
+        );
+      }
       soundNotificationService.startKeepAliveService();
     }
 
     // Ensure background service stays active when app transitions to background or minimized
     const appStateSub = AppState.addEventListener('change', (nextState) => {
       if (isLoggedIn && (nextState === 'background' || nextState === 'inactive')) {
+        const user = getVendorUser();
+        const token = getToken();
+        if (user && token) {
+          soundNotificationService.syncVendorSession(
+            user.vendorId || user._id || user.id || '',
+            token,
+            'https://vendor.ficapp.in/api',
+            JSON.stringify(user.businesses || [])
+          );
+        }
         soundNotificationService.startKeepAliveService();
       }
     });

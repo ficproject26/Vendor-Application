@@ -12,10 +12,23 @@ import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.net.HttpURLConnection
+import java.net.URL
+import java.util.Collections
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 
 class VendorKeepAliveService : Service() {
 
     private var wakeLock: PowerManager.WakeLock? = null
+    private var pollerThread: Thread? = null
+    private val isServiceActive = AtomicBoolean(false)
+    private val isSeeded = AtomicBoolean(false)
+    private var pollCycleCount = 0
 
     companion object {
         const val CHANNEL_ID = "vendor_keepalive_service_channel"
@@ -26,6 +39,9 @@ class VendorKeepAliveService : Service() {
         const val ACTION_STOP = "ACTION_STOP_KEEPALIVE"
 
         var isRunning = false
+
+        // Thread-safe set of known order IDs to prevent duplicate system alerts
+        val knownOrderIds: MutableSet<String> = Collections.newSetFromMap(ConcurrentHashMap())
 
         fun start(context: Context) {
             try {
@@ -50,6 +66,12 @@ class VendorKeepAliveService : Service() {
                 context.startService(intent)
             } catch (e: Exception) {
                 e.printStackTrace()
+            }
+        }
+
+        fun markOrderHandled(orderId: String?) {
+            if (!orderId.isNullOrBlank()) {
+                knownOrderIds.add(orderId.trim())
             }
         }
     }
@@ -125,21 +147,213 @@ class VendorKeepAliveService : Service() {
             }
             isRunning = true
 
-            // Acquire light partial wake lock for network persistence
+            // Acquire light partial wake lock for network persistence in background
             try {
                 val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
                 wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "VendorMobile::KeepAliveWakeLock").apply {
                     setReferenceCounted(false)
-                    acquire(10 * 60 * 1000L) // 10 minute chunks, refreshed by OS
+                    acquire(10 * 60 * 1000L) // Refreshed periodically
                 }
             } catch (e: Exception) {}
+
+            // Start autonomous background polling thread
+            startPollerThread()
+
         } catch (e: Exception) {
             e.printStackTrace()
         }
     }
 
+    private fun startPollerThread() {
+        if (isServiceActive.getAndSet(true)) {
+            return // Poller thread is already running
+        }
+
+        pollerThread = Thread {
+            while (isServiceActive.get()) {
+                try {
+                    val prefs = getSharedPreferences(OrderAlertModule.PREFS_NAME, Context.MODE_PRIVATE)
+                    val vendorId = prefs.getString(OrderAlertModule.KEY_VENDOR_ID, "") ?: ""
+                    val authToken = prefs.getString(OrderAlertModule.KEY_AUTH_TOKEN, "") ?: ""
+                    val apiUrl = prefs.getString(OrderAlertModule.KEY_API_URL, "https://vendor.ficapp.in/api") ?: "https://vendor.ficapp.in/api"
+
+                    if (vendorId.isNotBlank() && authToken.isNotBlank()) {
+                        pollCycleCount++
+
+                        // 1. Always poll transactional orders
+                        pollEndpoint(apiUrl, authToken, vendorId, "/vendor/orders", isBooking = false, isJob = false)
+
+                        // 2. Alternate polling for bookings (every 2nd tick)
+                        if (pollCycleCount % 2 == 0) {
+                            pollEndpoint(apiUrl, authToken, vendorId, "/vendor/bookings", isBooking = true, isJob = false)
+                        }
+
+                        // 3. Alternate polling for applications (every 3rd tick)
+                        if (pollCycleCount % 3 == 0) {
+                            pollEndpoint(apiUrl, authToken, vendorId, "/vendor/applications", isBooking = false, isJob = true)
+                        }
+                    }
+                } catch (e: Exception) {
+                    // Non-blocking background catch
+                }
+
+                try {
+                    Thread.sleep(4500)
+                } catch (ie: InterruptedException) {
+                    break
+                }
+            }
+        }.apply {
+            isDaemon = true
+            name = "VendorBackgroundOrderPoller"
+            start()
+        }
+    }
+
+    private fun pollEndpoint(
+        baseUrl: String,
+        token: String,
+        vendorId: String,
+        endpointPath: String,
+        isBooking: Boolean,
+        isJob: Boolean
+    ) {
+        var connection: HttpURLConnection? = null
+        try {
+            val cleanBase = baseUrl.trimEnd('/')
+            val fullUrl = "$cleanBase$endpointPath"
+            val url = URL(fullUrl)
+
+            connection = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 7000
+                readTimeout = 7000
+                setRequestProperty("Authorization", "Bearer $token")
+                setRequestProperty("Content-Type", "application/json")
+                setRequestProperty("Accept", "application/json")
+                setRequestProperty("x-vendor-id", vendorId)
+            }
+
+            val responseCode = connection.responseCode
+            if (responseCode in 200..299) {
+                val reader = BufferedReader(InputStreamReader(connection.inputStream))
+                val sb = StringBuilder()
+                var line: String?
+                while (reader.readLine().also { line = it } != null) {
+                    sb.append(line)
+                }
+                reader.close()
+
+                val rootObj = JSONObject(sb.toString())
+                val dataArray: JSONArray = rootObj.optJSONArray("data") ?: JSONArray()
+
+                // On the very first run, seed existing IDs into knownOrderIds to prevent historical alerts
+                if (!isSeeded.get()) {
+                    for (i in 0 until dataArray.length()) {
+                        val item = dataArray.optJSONObject(i) ?: continue
+                        val oid = item.optString("order_number").ifBlank {
+                            item.optString("id").ifBlank {
+                                item.optString("_id").ifBlank {
+                                    item.optString("applicationId")
+                                }
+                            }
+                        }
+                        if (oid.isNotBlank()) {
+                            knownOrderIds.add(oid.trim())
+                        }
+                    }
+                    if (endpointPath == "/vendor/orders") {
+                        isSeeded.set(true)
+                    }
+                    return
+                }
+
+                // Check for new, unseen incoming items
+                for (i in 0 until dataArray.length()) {
+                    val item = dataArray.optJSONObject(i) ?: continue
+                    val orderNumber = item.optString("order_number").trim()
+                    val orderId = item.optString("id").ifBlank {
+                        item.optString("_id").ifBlank {
+                            item.optString("applicationId").ifBlank { orderNumber }
+                        }
+                    }.trim()
+
+                    val primaryKey = if (orderNumber.isNotBlank()) orderNumber else orderId
+                    if (primaryKey.isBlank()) continue
+
+                    // Deduplication check: if seen by socket or previous poll, skip
+                    if (!knownOrderIds.contains(primaryKey) && !knownOrderIds.contains(orderId)) {
+                        knownOrderIds.add(primaryKey)
+                        if (orderId.isNotBlank()) knownOrderIds.add(orderId)
+
+                        // Extract transaction details
+                        val custName = item.optString("customer_name").ifBlank {
+                            item.optString("memberName").ifBlank {
+                                item.optString("candidateName", "Customer")
+                            }
+                        }
+                        val amount = item.optDouble("totalAmount", item.optDouble("amount", item.optDouble("finalAmount", 0.0)))
+                        val rawCategory = item.optString("category").ifBlank {
+                            item.optString("type", if (isJob) "Jobs" else if (isBooking) "Bookings" else "Orders")
+                        }
+
+                        val segment = if (isJob || rawCategory.contains("Job", true)) {
+                            "Jobs"
+                        } else if (isBooking || rawCategory.contains("Booking", true) || rawCategory.contains("Stay", true) || rawCategory.contains("Travel", true) || rawCategory.contains("Service", true)) {
+                            "Bookings"
+                        } else {
+                            "Orders"
+                        }
+
+                        var itemSummary = if (isJob) "Job Application" else if (isBooking) "Service Booking" else "Order Item"
+                        val itemsArr = item.optJSONArray("items")
+                        if (itemsArr != null && itemsArr.length() > 0) {
+                            val firstIt = itemsArr.optJSONObject(0)
+                            val itName = firstIt?.optString("name", "Item") ?: "Item"
+                            val itQty = firstIt?.optInt("quantity", 1) ?: 1
+                            itemSummary = "${itQty}x $itName"
+                        } else {
+                            val prodDetails = item.optString("product_details").ifBlank {
+                                item.optString("serviceName").ifBlank {
+                                    item.optString("jobTitle")
+                                }
+                            }
+                            if (prodDetails.isNotBlank()) {
+                                itemSummary = prodDetails
+                            }
+                        }
+
+                        val displayId = if (orderNumber.isNotBlank()) orderNumber else orderId
+                        val titlePrefix = if (isJob) "Job Application" else if (isBooking) "Booking" else "Order"
+                        val title = "New $titlePrefix (#$displayId)"
+                        val amountStr = if (amount > 0) " • ₹${String.format("%.0f", amount)}" else ""
+                        val body = "$custName placed a new $titlePrefix$amountStr • $itemSummary"
+
+                        // Trigger native Android System Notification
+                        OrderAlertModule.postSystemNotification(
+                            this@VendorKeepAliveService,
+                            title,
+                            body,
+                            orderId,
+                            rawCategory,
+                            segment
+                        )
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            // Background network attempt error: silent retry on next tick
+        } finally {
+            connection?.disconnect()
+        }
+    }
+
     private fun stopForegroundService() {
         isRunning = false
+        isServiceActive.set(false)
+        pollerThread?.interrupt()
+        pollerThread = null
+
         try {
             wakeLock?.let {
                 if (it.isHeld) it.release()
@@ -157,4 +371,3 @@ class VendorKeepAliveService : Service() {
         super.onDestroy()
     }
 }
-

@@ -306,8 +306,14 @@ class VendorSocketService {
     }
 
     // Record in deduplication set
-    if (orderId) this.processedOrderIds.add(orderId);
-    if (orderNumber) this.processedOrderIds.add(orderNumber);
+    if (orderId) {
+      this.processedOrderIds.add(orderId);
+      soundNotificationService.markOrderHandled(orderId);
+    }
+    if (orderNumber) {
+      this.processedOrderIds.add(orderNumber);
+      soundNotificationService.markOrderHandled(orderNumber);
+    }
 
     // Format notification
     const notification = this.parseActivityNotification(rawItem);
@@ -318,6 +324,7 @@ class VendorSocketService {
 
     if (notification.id) {
       this.processedOrderIds.add(notification.id);
+      soundNotificationService.markOrderHandled(notification.id);
     }
 
     console.log(`🔔 [VendorSocketService] New ${notification.category} Alert: ${notification.id} - ${notification.itemName}, listeners: ${this.notificationListeners.size}`);
