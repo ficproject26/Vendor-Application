@@ -1127,10 +1127,34 @@ export default function BusinessScreen({
 
         const isJob = newItemCategory === 'Jobs';
 
-        // Future date validation for jobs
-        if (isJob && deadlineDate) {
-          const todayStr = new Date().toISOString().split('T')[0];
-          if (deadlineDate.trim() < todayStr) {
+        // Future date validation for jobs (Issue 10 fix: robust date comparison avoiding ASCII string ordering bug)
+        if (isJob && deadlineDate && deadlineDate.trim()) {
+          const cleanDeadline = deadlineDate.trim();
+          let deadlineTs: number = NaN;
+          if (cleanDeadline.includes('/')) {
+            const parts = cleanDeadline.split('/').map(Number);
+            if (parts.length === 3) {
+              // Format MM/DD/YYYY
+              deadlineTs = new Date(parts[2], parts[0] - 1, parts[1], 23, 59, 59, 999).getTime();
+            }
+          } else if (cleanDeadline.includes('-')) {
+            const parts = cleanDeadline.split('-').map(Number);
+            if (parts.length === 3) {
+              if (parts[0] > 1000) {
+                // YYYY-MM-DD
+                deadlineTs = new Date(parts[0], parts[1] - 1, parts[2], 23, 59, 59, 999).getTime();
+              } else {
+                // DD-MM-YYYY
+                deadlineTs = new Date(parts[2], parts[1] - 1, parts[0], 23, 59, 59, 999).getTime();
+              }
+            }
+          } else {
+            deadlineTs = new Date(cleanDeadline).getTime();
+          }
+
+          const now = new Date();
+          const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0).getTime();
+          if (!isNaN(deadlineTs) && deadlineTs < todayStart) {
             Alert.alert('Invalid Deadline Date', 'Job application deadline cannot be in the past.');
             setLoading(false);
             return;
@@ -1256,143 +1280,25 @@ export default function BusinessScreen({
             const finalImage = isJob ? '' : (chosenImage || updatedItem.image);
             setItems(prev => prev.map(i => i.id === editingItemId ? { ...itemPayload, ...updatedItem, image: finalImage } : i));
             Alert.alert('Success', isJob ? 'Job updated successfully!' : 'Item updated successfully!');
-          } catch (apiErr) {
-            console.warn('Backend updateProduct error, updating locally:', apiErr);
-            const localUpdated: BusinessItem = {
-              id: editingItemId,
-              name: itemPayload.name || '',
-              detail: itemPayload.detail || '',
-              price: itemPayload.price || '₹0',
-              originalPrice: itemPayload.originalPrice,
-              isActive: itemPayload.isActive ?? true,
-              category: itemPayload.category || 'Products',
-              image: isJob ? '' : (chosenImage || categoryImages[itemPayload.category || 'Products']),
-              subCategory: itemPayload.subCategory || 'General',
-              itemType: itemPayload.itemType || '',
-              unit: itemPayload.unit || 'count',
-              stock: itemPayload.stock || '10',
-              pinCode: itemPayload.pinCode || '600001',
-              selectedAmenities,
-              amenities: selectedAmenities,
-              roomClass,
-              numberOfGuests,
-              boardingPoint,
-              boardingTime,
-              additionalBoardingPoints,
-              boardingPoints: [boardingPoint, ...additionalBoardingPoints.map(b => b.point)].filter(Boolean),
-              dropPoint,
-              arrivalTime,
-              additionalDropPoints,
-              dropPoints: [dropPoint, ...additionalDropPoints.map(d => d.point)].filter(Boolean),
-              droppingPoints: [dropPoint, ...additionalDropPoints.map(d => d.point)].filter(Boolean),
-              totalDistance,
-              busSchedule,
-              routeStops,
-              operator: itemPayload.operator,
-              operatorName: itemPayload.operatorName,
-              from: itemPayload.from,
-              to: itemPayload.to,
-              origin: itemPayload.origin,
-              destination: itemPayload.destination,
-              departureTime: itemPayload.departureTime,
-              duration: itemPayload.duration,
-              badge: itemPayload.badge,
-              vehicleNumber: itemPayload.vehicleNumber,
-              vehicleRegNo: itemPayload.vehicleRegNo,
-              busNumber: itemPayload.busNumber,
-              seatsLeft: itemPayload.seatsLeft,
-              jobType: itemPayload.jobType,
-              jobLocation: itemPayload.jobLocation,
-              experienceRequired: itemPayload.experienceRequired,
-              salaryPackage: itemPayload.salaryPackage,
-              skillsRequirement: itemPayload.skillsRequirement,
-              jobDescription: itemPayload.jobDescription,
-              keyResponsibilities: itemPayload.keyResponsibilities,
-              deadlineDate: itemPayload.deadlineDate,
-              applicationTips: itemPayload.applicationTips,
-              qualificationRequired: itemPayload.qualificationRequired,
-              linkedProfileUrl: itemPayload.linkedProfileUrl,
-              companyName: itemPayload.companyName,
-              companyWebsite: itemPayload.companyWebsite,
-              contactNumber: itemPayload.contactNumber,
-              mailId: itemPayload.mailId,
-              vacancies: itemPayload.vacancies,
-              jobID: itemPayload.jobID || currentEditingItem?.jobID,
-            };
-            setItems(prev => prev.map(i => i.id === editingItemId ? localUpdated : i));
-            Alert.alert('Success', isJob ? 'Job updated locally successfully!' : 'Item updated locally successfully!');
+          } catch (apiErr: any) {
+            console.error('Backend updateProduct error:', apiErr);
+            const errMsg = apiErr?.response?.data?.message || apiErr?.message || 'Failed to update item on server.';
+            Alert.alert('Update Failed', errMsg);
+            setLoading(false);
+            return;
           }
         } else {
           try {
             const savedItem = await createProduct(itemPayload);
             const finalImage = isJob ? '' : (chosenImage || savedItem.image);
             setItems(prev => [...prev, { ...savedItem, image: finalImage, jobID: itemPayload.jobID || savedItem.jobID }]);
-            Alert.alert('Success', 'Item saved successfully!');
-          } catch (apiErr) {
-            console.warn('Backend createProduct error, saving locally:', apiErr);
-            const localSaved: BusinessItem = {
-              id: 'prod_' + Date.now(),
-              name: itemPayload.name || '',
-              detail: itemPayload.detail || '',
-              price: itemPayload.price || '₹0',
-              originalPrice: itemPayload.originalPrice,
-              isActive: itemPayload.isActive ?? true,
-              category: itemPayload.category || 'Products',
-              image: isJob ? '' : (chosenImage || categoryImages[itemPayload.category || 'Products']),
-              subCategory: itemPayload.subCategory || 'General',
-              itemType: itemPayload.itemType || '',
-              unit: itemPayload.unit || 'count',
-              stock: itemPayload.stock || '10',
-              pinCode: itemPayload.pinCode || '600001',
-              selectedAmenities,
-              amenities: selectedAmenities,
-              roomClass,
-              numberOfGuests,
-              boardingPoint,
-              boardingTime,
-              additionalBoardingPoints,
-              boardingPoints: [boardingPoint, ...additionalBoardingPoints.map(b => b.point)].filter(Boolean),
-              dropPoint,
-              arrivalTime,
-              additionalDropPoints,
-              dropPoints: [dropPoint, ...additionalDropPoints.map(d => d.point)].filter(Boolean),
-              droppingPoints: [dropPoint, ...additionalDropPoints.map(d => d.point)].filter(Boolean),
-              totalDistance,
-              busSchedule,
-              routeStops,
-              operator: itemPayload.operator,
-              operatorName: itemPayload.operatorName,
-              from: itemPayload.from,
-              to: itemPayload.to,
-              origin: itemPayload.origin,
-              destination: itemPayload.destination,
-              departureTime: itemPayload.departureTime,
-              duration: itemPayload.duration,
-              badge: itemPayload.badge,
-              vehicleNumber: itemPayload.vehicleNumber,
-              vehicleRegNo: itemPayload.vehicleRegNo,
-              busNumber: itemPayload.busNumber,
-              seatsLeft: itemPayload.seatsLeft,
-              jobType: itemPayload.jobType,
-              jobLocation: itemPayload.jobLocation,
-              experienceRequired: itemPayload.experienceRequired,
-              salaryPackage: itemPayload.salaryPackage,
-              skillsRequirement: itemPayload.skillsRequirement,
-              jobDescription: itemPayload.jobDescription,
-              keyResponsibilities: itemPayload.keyResponsibilities,
-              deadlineDate: itemPayload.deadlineDate,
-              applicationTips: itemPayload.applicationTips,
-              qualificationRequired: itemPayload.qualificationRequired,
-              linkedProfileUrl: itemPayload.linkedProfileUrl,
-              companyName: itemPayload.companyName,
-              companyWebsite: itemPayload.companyWebsite,
-              contactNumber: itemPayload.contactNumber,
-              mailId: itemPayload.mailId,
-              vacancies: itemPayload.vacancies,
-              jobID: itemPayload.jobID,
-            };
-            setItems(prev => [...prev, localSaved]);
-            Alert.alert('Success', 'Item saved locally successfully!');
+            Alert.alert('Success', isJob ? 'Job created successfully!' : 'Item saved successfully!');
+          } catch (apiErr: any) {
+            console.error('Backend createProduct error:', apiErr);
+            const errMsg = apiErr?.response?.data?.message || apiErr?.message || 'Failed to save item on server.';
+            Alert.alert('Submission Failed', errMsg);
+            setLoading(false);
+            return;
           }
         }
       }
@@ -1447,6 +1353,20 @@ export default function BusinessScreen({
   };
 
   const openAddItemModal = () => {
+    const currentBiz = (activeBizId ? businesses.find((b: any) => (b._id || b.id) === activeBizId) : null) || businesses.find((b: any) => normalizeCategory(b.vendorType || b.category || b.baseVendorType) === selectedCategory) || businesses[0];
+    const bStat = String(currentBiz?.status || '').toLowerCase().trim();
+    const bApp = String(currentBiz?.approvalStatus || '').toLowerCase().trim();
+    const isPending = currentBiz?.isApproved === false ||
+      ['pending', 'pending approval', 'pending_approval', 'pending pincode admin review', 'under_verification', 'suspended', 'rejected'].includes(bStat) ||
+      ['pending', 'pending approval', 'under_verification', 'rejected'].includes(bApp) ||
+      currentBiz?.isActive === false;
+    if (isPending) {
+      Alert.alert(
+        'Outlet Pending Review',
+        'This business outlet is currently awaiting Admin approval or is suspended. Adding items will be available once the outlet is approved.'
+      );
+      return;
+    }
     resetAllItemFormStates();
     setModalType('item');
     const defaultCat = selectedCategory || 'Products';
@@ -1908,13 +1828,23 @@ export default function BusinessScreen({
                             {outletItemCount} {catConf.unit || 'Item'}{outletItemCount !== 1 ? 's' : ''}
                           </Text>
                         </View>
-                        {(biz.isApproved === false || biz.status === 'Pending Pincode Admin Review' || biz.approvalStatus === 'Pending') && (
-                          <View style={[tw`px-2.5 py-0.5 rounded-full bg-amber-100 border border-amber-300`]}>
-                            <Text style={tw`text-[10px] font-bold text-amber-800`}>
-                              ⏳ Pending Review
-                            </Text>
-                          </View>
-                        )}
+                        {(() => {
+                          const bStat = String(biz.status || '').toLowerCase().trim();
+                          const bApp = String(biz.approvalStatus || '').toLowerCase().trim();
+                          const isPend = biz.isApproved === false ||
+                            ['pending', 'pending approval', 'pending_approval', 'pending pincode admin review', 'under_verification', 'suspended', 'rejected'].includes(bStat) ||
+                            ['pending', 'pending approval', 'under_verification', 'rejected'].includes(bApp) ||
+                            biz.isActive === false;
+                          if (!isPend) return null;
+                          const isSuspended = bStat === 'suspended' || bStat === 'rejected';
+                          return (
+                            <View style={[tw`px-2.5 py-0.5 rounded-full`, isSuspended ? tw`bg-rose-100 border border-rose-300` : tw`bg-amber-100 border border-amber-300`]}>
+                              <Text style={[tw`text-[10px] font-bold`, isSuspended ? tw`text-rose-800` : tw`text-amber-800`]}>
+                                {isSuspended ? '✕ Suspended' : '⏳ Pending Review'}
+                              </Text>
+                            </View>
+                          );
+                        })()}
                       </View>
 
                       {/* Top Right Icon Box */}
@@ -2065,10 +1995,16 @@ export default function BusinessScreen({
                   </TouchableOpacity>
                   <TouchableOpacity
                     onPress={() => {
-                      if (selectedBiz?.isApproved === false || selectedBiz?.status === 'Pending Pincode Admin Review') {
+                      const bStat = String(selectedBiz?.status || '').toLowerCase().trim();
+                      const bApp = String(selectedBiz?.approvalStatus || '').toLowerCase().trim();
+                      const isPending = selectedBiz?.isApproved === false ||
+                        ['pending', 'pending approval', 'pending_approval', 'pending pincode admin review', 'under_verification', 'suspended', 'rejected'].includes(bStat) ||
+                        ['pending', 'pending approval', 'under_verification', 'rejected'].includes(bApp) ||
+                        selectedBiz?.isActive === false;
+                      if (isPending) {
                         Alert.alert(
                           'Outlet Pending Review',
-                          'This business outlet is currently awaiting Sub Admin approval. Adding items will be available once the outlet is approved.'
+                          'This business outlet is currently awaiting Admin approval or is suspended. Adding items will be available once the outlet is approved.'
                         );
                         return;
                       }
@@ -2087,13 +2023,23 @@ export default function BusinessScreen({
             )}
 
             {/* Pending Outlet Alert Banner */}
-            {(selectedBiz?.isApproved === false || selectedBiz?.status === 'Pending Pincode Admin Review') && (
-              <View style={[tw`mt-2.5 p-2.5 rounded-xl flex-row items-center`, { backgroundColor: '#FEF3C7', borderColor: '#FCD34D', borderWidth: 1 }]}>
-                <Text style={tw`text-amber-900 font-bold text-xs flex-1`}>
-                  ⏳ This outlet is awaiting Sub Admin review. Adding catalog items and receiving orders are restricted until verified.
-                </Text>
-              </View>
-            )}
+            {(() => {
+              const bStat = String(selectedBiz?.status || '').toLowerCase().trim();
+              const bApp = String(selectedBiz?.approvalStatus || '').toLowerCase().trim();
+              const isPend = selectedBiz?.isApproved === false ||
+                ['pending', 'pending approval', 'pending_approval', 'pending pincode admin review', 'under_verification', 'suspended', 'rejected'].includes(bStat) ||
+                ['pending', 'pending approval', 'under_verification', 'rejected'].includes(bApp) ||
+                selectedBiz?.isActive === false;
+              if (!isPend) return null;
+              const isSuspended = bStat === 'suspended' || bStat === 'rejected';
+              return (
+                <View style={[tw`mt-2.5 p-2.5 rounded-xl flex-row items-center`, isSuspended ? { backgroundColor: '#FEE2E2', borderColor: '#FCA5A5', borderWidth: 1 } : { backgroundColor: '#FEF3C7', borderColor: '#FCD34D', borderWidth: 1 }]}>
+                  <Text style={[tw`font-bold text-xs flex-1`, isSuspended ? tw`text-rose-900` : tw`text-amber-900`]}>
+                    {isSuspended ? '✕ This outlet is suspended or rejected. Catalog items and orders are restricted.' : '⏳ This outlet is awaiting Admin review. Adding catalog items and receiving orders are restricted until verified.'}
+                  </Text>
+                </View>
+              );
+            })()}
 
             {/* Sub-Tabs Bar: Overview & Items */}
             <View style={tw`flex-row mt-3 bg-gray-100 p-1 rounded-2xl ${isDark ? 'bg-zinc-800' : 'bg-gray-100'}`}>

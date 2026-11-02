@@ -492,15 +492,17 @@ export const formatImageUrl = (url: string | undefined | null): string => {
 
 // Map API product response to App's BusinessItem
 export const mapApiProductToBusinessItem = (product: any, categoryFallback: CategoryKey = 'Products'): BusinessItem => {
-  const isJob = Boolean(
+  const rawExplicitCat = String(product.mainCategory || product.subNavbarCategory || product.category || categoryFallback || '').trim();
+  const normalizedExplicit = normalizeCategory(rawExplicitCat);
+  const isExplicitNonJob = ['Food', 'Products', 'Daily Needs', 'Stay', 'Services', 'Travel'].includes(normalizedExplicit);
+
+  const isJob = !isExplicitNonJob && Boolean(
+    normalizedExplicit === 'Jobs' ||
     product.mainCategory === 'Jobs' ||
     product.subNavbarCategory === 'Jobs' ||
     product.category === 'Jobs' ||
     categoryFallback === 'Jobs' ||
-    product.jobType ||
-    product.salaryPackage ||
-    product.vacancies ||
-    product.skillsRequirement
+    (Boolean(product.salaryPackage || product.vacancies || product.skillsRequirement) && !product.foodType && !product.roomClass && !product.roomType)
   );
   const rawCat = isJob ? 'Jobs' : (product.mainCategory || product.subNavbarCategory || product.vendorType || product.category || categoryFallback);
   const resolvedCategory: CategoryKey = isJob ? 'Jobs' : normalizeCategory(rawCat);
@@ -1212,6 +1214,8 @@ export const markVendorNotificationReadApi = async (id?: string) => {
     });
   } catch (e) {}
 };
+
+export const markNotificationAsRead = markVendorNotificationReadApi;
 
 export const registerDeviceToken = async (fcmToken: string): Promise<boolean> => {
   if (!fcmToken) return false;

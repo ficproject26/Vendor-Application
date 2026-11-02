@@ -1,5 +1,5 @@
 import React, {useState, useEffect, useMemo} from 'react';
-import { fetchOrders, fetchBookings, fetchApplications, updateOrderStatus, getVendorUser, formatImageUrl, fetchOrderById } from '../services/apiService';
+import { fetchOrders, fetchBookings, fetchApplications, updateOrderStatus, getVendorUser, formatImageUrl, fetchOrderById, fetchProducts } from '../services/apiService';
 import { socketService } from '../services/socketService';
 import { sessionManager } from '../services/sessionManager';
 import {
@@ -56,6 +56,18 @@ const getCustomerDisplayId = (item: any): string => {
   if (isCanonicalCustId(raw.memberId)) return String(raw.memberId);
   if (raw.order_number) return `CUST-${String(raw.order_number).slice(-6)}`;
   return 'N/A';
+};
+
+export const formatDisplayId = (idStr?: string, prefix?: string): string => {
+  if (!idStr || idStr === 'N/A') return 'N/A';
+  let clean = String(idStr).trim().replace(/^#+/, '');
+  if (/^[0-9a-fA-F]{24}$/.test(clean)) {
+    return prefix ? `${prefix}-${clean.slice(-6).toUpperCase()}` : `#${clean.slice(-6).toUpperCase()}`;
+  }
+  if (prefix && !clean.toUpperCase().startsWith(prefix.toUpperCase())) {
+    return `${prefix}-${clean}`;
+  }
+  return clean.startsWith('#') ? clean : `#${clean}`;
 };
 
 type OrderStatus = 'All' | 'Pending' | 'Preparing' | 'Assigned' | 'Delivered' | 'Cancelled';
@@ -440,6 +452,7 @@ export default function OrdersScreen({
   const [ordersRaw, setOrdersRaw] = useState<any[]>([]);
   const [bookingsRaw, setBookingsRaw] = useState<any[]>([]);
   const [jobsRaw, setJobsRaw] = useState<any[]>([]);
+  const [productImageMap, setProductImageMap] = useState<Record<string, string>>({});
   const [loadingOrders, setLoadingOrders] = useState(false);
   const [loadingBookings, setLoadingBookings] = useState(false);
   const [loadingJobs, setLoadingJobs] = useState(false);
@@ -492,6 +505,23 @@ export default function OrdersScreen({
       if (jobRes.status === 'fulfilled' && Array.isArray(jobRes.value)) {
         setJobsRaw(jobRes.value);
         sessionManager.saveVendorCache(vendorId, 'jobs_raw', jobRes.value);
+      }
+    }).catch(() => {});
+
+    // Hydrate catalog images to guarantee product images render in My Orders
+    fetchProducts().then((prods: any) => {
+      if (Array.isArray(prods) && isMounted) {
+        const map: Record<string, string> = {};
+        prods.forEach((p: any) => {
+          const img = p.image || p.imageUrl || (Array.isArray(p.images) && p.images[0]);
+          if (img) {
+            if (p._id) map[String(p._id)] = img;
+            if (p.id) map[String(p.id)] = img;
+            if (p.name) map[String(p.name).trim().toLowerCase()] = img;
+            if (p.productName) map[String(p.productName).trim().toLowerCase()] = img;
+          }
+        });
+        setProductImageMap(map);
       }
     }).catch(() => {});
 
@@ -1146,6 +1176,10 @@ export default function OrdersScreen({
     const payMethod = o.paymentMethod || o.payment_method || (isCod ? 'Cash on Delivery' : 'Online / Gateway');
     const orderCat = resolveOrderCategory(o);
 
+    const firstItemId = o.items?.[0]?.productId || o.items?.[0]?._id || o.productId;
+    const firstItemName = (o.items?.[0]?.name || o.name || '').trim().toLowerCase();
+    const rawImg = o.imageUrl || o.image || (o.items && (o.items[0]?.image || o.items[0]?.imageUrl || o.items[0]?.img)) || (firstItemId && productImageMap[String(firstItemId)]) || (firstItemName && productImageMap[firstItemName]) || '';
+
     return {
       id: o.order_number || o.id || o._id,
       dbId: o._id || o.id,
@@ -1156,7 +1190,7 @@ export default function OrdersScreen({
       paymentStatus: payStatus,
       paymentMethod: payMethod,
       quantity: totalQty,
-      image: formatImageUrl(o.imageUrl || o.image || (o.items && (o.items[0]?.image || o.items[0]?.imageUrl || o.items[0]?.img)) || ''),
+      image: formatImageUrl(rawImg),
       customerName: o.customer_name || o.memberName || 'Customer',
       customerPhone: o.customerPhone || o.customer_phone || o.phone || o.memberPhone || '',
       customerAddress: addrStr,
@@ -1214,8 +1248,28 @@ export default function OrdersScreen({
     }
 
     // Stay properties
-    const propName = o.propertyDetails?.propertyName || o.propertyName || o.hotelName || 'Stay Property';
-    const roomName = o.roomDetails?.name || o.roomName || (o.items && o.items[0]?.name) || o.product_details || 'Deluxe Room';
+    const propName = o.hotelName ||
+      o.propertyDetails?.propertyName ||
+      o.propertyName ||
+      o.propertyDetails?.name ||
+      o.items?.[0]?.hotelName ||
+      o.items?.[0]?.propertyName ||
+      o.items?.[0]?.name ||
+      (o.product_details && !o.product_details.toLowerCase().includes('service') ? o.product_details.split(/[•·-]/)[0].trim() : '') ||
+      o.businessName ||
+      'Stay Property';
+    const roomName = o.roomDetails?.name ||
+      o.roomName ||
+      o.roomType ||
+      o.items?.[0]?.variant ||
+      o.items?.[0]?.roomType ||
+      (o.items && o.items[0]?.name && o.items[0]?.name !== propName ? o.items[0]?.name : '') ||
+      (o.product_details && o.product_details.includes(' - ') ? o.product_details.split(' - ')[1]?.trim() : '') ||
+      'Deluxe Room';
+
+    if (bookingCat === 'Stay') {
+      resolvedServiceName = propName;
+    }
     const cInDate = o.checkInDate || (o.staySchedule && o.staySchedule.checkInDate) || 'Not provided';
     const cInTime = o.checkInTime || (o.staySchedule && o.staySchedule.checkInTime) || '12:00 PM';
     const cOutDate = o.checkOutDate || (o.staySchedule && o.staySchedule.checkOutDate) || 'Not provided';
@@ -1304,7 +1358,7 @@ export default function OrdersScreen({
       .filter(o => isProductFoodDailyOrder(o))
       .map(o => transformRawToOrder(o))
       .sort((a, b) => getTransactionTimestamp(b) - getTransactionTimestamp(a));
-  }, [ordersRaw]);
+  }, [ordersRaw, productImageMap]);
 
   // Service, Stay & Travel Bookings (NO JOBS, NO PRODUCT/FOOD/DAILY NEEDS)
   const bookingsData: Booking[] = useMemo(() => {
@@ -1343,7 +1397,8 @@ export default function OrdersScreen({
         const candidatePhone = o.candidatePhone || o.customerPhone || o.customer_phone || o.phone || o.memberPhone || '';
         const candidateEmail = o.candidateEmail || o.customer_email || o.applicant_email || o.email || '';
         const resolvedJobTitle = o.jobTitle || (o.items && o.items[0]?.name) || o.product_details || o.name || 'Job Application';
-        const resolvedJobId = o.jobId || (o.items && o.items[0]?.productId) || o.productId || 'N/A';
+        const rawJobId = o.jobId || (o.items && o.items[0]?.productId) || o.productId || 'N/A';
+        const resolvedJobId = formatDisplayId(rawJobId, 'JOB');
         const subDate = o.applicationDate || o.createdAt
           ? new Date(o.applicationDate || o.createdAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
           : 'Just now';
@@ -2511,16 +2566,16 @@ export default function OrdersScreen({
                   ]}>
                   {/* Tier 1 Header: Application Tag + Application ID (Left), Status Badge (Right) */}
                   <View style={tw`flex-row items-center justify-between mb-2`}>
-                    <View style={tw`flex-row items-center flex-1 mr-2`}>
-                      <View style={[tw`flex-row items-center px-2.5 py-1 rounded-full mr-2`, isDark ? tw`bg-purple-950/60` : tw`bg-purple-50`]}>
-                        <Briefcase size={12} color="#8B5CF6" style={tw`mr-1`} />
+                    <View style={tw`flex-row items-center flex-1 mr-2 flex-shrink`}>
+                      <View style={[tw`flex-row items-center px-2 py-0.5 rounded-full mr-1.5 flex-shrink-0`, isDark ? tw`bg-purple-950/60` : tw`bg-purple-50`]}>
+                        <Briefcase size={11} color="#8B5CF6" style={tw`mr-1`} />
                         <Text style={tw`text-[10px] font-black text-purple-700 dark:text-purple-400 tracking-wider`}>JOB APPLICATION</Text>
                       </View>
-                      <Text style={[tw`font-extrabold text-sm font-mono`, isDark ? tw`text-white` : tw`text-gray-900`]} numberOfLines={1}>
-                        #{order.id}
+                      <Text style={[tw`font-extrabold text-xs font-mono flex-shrink`, isDark ? tw`text-white` : tw`text-gray-900`]} numberOfLines={1}>
+                        {formatDisplayId(order.id, 'APP')}
                       </Text>
                     </View>
-                    <View style={[tw`px-2.5 py-1 rounded-full`, {backgroundColor: config.bgColor}]}>
+                    <View style={[tw`px-2.5 py-1 rounded-full flex-shrink-0`, {backgroundColor: config.bgColor}]}>
                       <Text style={[tw`text-[11px] font-bold`, {color: config.color}]}>
                         {order.status}
                       </Text>
@@ -2567,11 +2622,11 @@ export default function OrdersScreen({
                     </Text>
                     <View style={tw`flex-row items-center justify-between mt-1`}>
                       <Text style={[tw`text-[10px] font-mono`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
-                        App ID: <Text style={tw`font-bold text-indigo-500`}>#{order.id}</Text>
+                        App ID: <Text style={tw`font-bold text-indigo-500`}>{formatDisplayId(order.id, 'APP')}</Text>
                       </Text>
                       {order.jobId && order.jobId !== 'N/A' ? (
                         <Text style={[tw`text-[10px] font-mono`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
-                          Job ID: #{order.jobId}
+                          Job ID: {formatDisplayId(order.jobId, 'JOB')}
                         </Text>
                       ) : null}
                     </View>
@@ -2812,13 +2867,13 @@ export default function OrdersScreen({
                         <View>
                           <Text style={[tw`text-[10px] font-bold uppercase`, isDark ? tw`text-zinc-500` : tw`text-gray-400`]}>Application ID</Text>
                           <Text style={[tw`text-xs font-mono font-bold text-indigo-500`]}>
-                            #{selectedOrder.rawOrder?.applicationId || selectedOrder.id}
+                            {formatDisplayId(selectedOrder.rawOrder?.applicationId || selectedOrder.id, 'APP')}
                           </Text>
                         </View>
                         <View style={tw`items-end`}>
                           <Text style={[tw`text-[10px] font-bold uppercase`, isDark ? tw`text-zinc-500` : tw`text-gray-400`]}>Job ID</Text>
                           <Text style={[tw`text-xs font-mono font-bold`, isDark ? tw`text-zinc-300` : tw`text-gray-700`]}>
-                            #{selectedOrder.rawOrder?.jobId || selectedOrder.rawOrder?.productId || 'JOB-101'}
+                            {formatDisplayId(selectedOrder.rawOrder?.jobId || selectedOrder.rawOrder?.productId || 'JOB-101', 'JOB')}
                           </Text>
                         </View>
                       </View>
@@ -3390,7 +3445,7 @@ export default function OrdersScreen({
                       </Text>
                       <View style={[tw`p-3 rounded-xl mb-3`, isDark ? tw`bg-zinc-900` : tw`bg-purple-50/50`]}>
                         <Text style={[tw`text-xs font-extrabold mb-1`, isDark ? tw`text-purple-300` : tw`text-purple-900`]}>
-                          {raw.hotelName || raw.propertyName || selectedBooking.serviceName}
+                          {raw.hotelName || raw.propertyName || (raw.items && raw.items[0]?.name) || selectedBooking.propertyName || selectedBooking.serviceName || 'Stay Property'}
                         </Text>
                         <Text style={[tw`text-[11px]`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>
                           {raw.roomsCount || 1} {raw.roomsCount === 1 ? 'Room' : 'Rooms'} • {raw.nightsCount || 1} {raw.nightsCount === 1 ? 'Night' : 'Nights'} • {raw.guests || raw.numberOfGuests || 1} Guest(s)

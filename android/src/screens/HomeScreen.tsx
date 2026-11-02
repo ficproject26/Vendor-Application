@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { fetchAnalytics, getVendorUser, fetchProfile, fetchOrders, fetchBookings, updateOrderStatus, fetchCustomers, CustomerItem, addLocalOrder, normalizeCategory, fetchVendorRatings, fetchAllBusinessesProducts } from '../services/apiService';
+import { fetchAnalytics, getVendorUser, fetchProfile, fetchOrders, fetchBookings, updateOrderStatus, fetchCustomers, CustomerItem, addLocalOrder, normalizeCategory, fetchVendorRatings, fetchAllBusinessesProducts, fetchVendorNotifications, markNotificationAsRead } from '../services/apiService';
 import { sessionManager } from '../services/sessionManager';
 import { socketService } from '../services/socketService';
 import { soundNotificationService } from '../services/soundNotificationService';
@@ -302,10 +302,12 @@ export default function HomeScreen({
     }
     try {
       const res = await fetchVendorRatings();
-      if (res && res.success) {
+      if (res && (res.success || res.overallRating !== undefined || res.averageRating !== undefined)) {
+        const avg = Number(res.overallRating ?? res.averageRating ?? res.rating ?? 0);
+        const count = Number(res.totalReviews ?? res.totalRatings ?? res.ratingsCount ?? (Array.isArray(res.reviews) ? res.reviews.length : 0));
         const rData = {
-          averageRating: res.averageRating || 0,
-          totalRatings: res.totalRatings || 0,
+          averageRating: avg,
+          totalRatings: count,
           breakdown: res.breakdown || { '5': 0, '4': 0, '3': 0, '2': 0, '1': 0 },
           reviews: res.reviews || [],
         };
@@ -335,9 +337,9 @@ export default function HomeScreen({
       onPress: () => onNavigate && onNavigate('Orders', { segment: 'Orders' }),
     },
     {
-      label: 'Revenue',
+      label: 'Settled Revenue',
       value: `₹${totalRevenue.toLocaleString()}`,
-      change: totalRevenue > 0 ? 'Verified' : '',
+      change: 'Settled',
       icon: Wallet,
       color: '#7C3AED',
       bgColor: '#F5F3FF',
@@ -402,20 +404,76 @@ export default function HomeScreen({
 
   const hasUnread = notifications.some(n => !n.isRead);
 
+  // Load Server and Local FCM Notification History (Issue 5 Fix)
+  const loadNotifications = async () => {
+    try {
+      const serverNotifs = await fetchVendorNotifications();
+      const localHistory = await sessionManager.getNotificationHistory(vendorId);
+
+      const combined: any[] = [];
+      const seen = new Set<string>();
+
+      if (Array.isArray(serverNotifs)) {
+        serverNotifs.forEach((sn: any) => {
+          const id = String(sn._id || sn.id || `${sn.title}_${sn.createdAt}`);
+          if (!seen.has(id)) {
+            seen.add(id);
+            combined.push({
+              id,
+              title: sn.title || 'Notification',
+              message: sn.message || sn.body || '',
+              time: sn.createdAt ? new Date(sn.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Recently',
+              type: sn.type || 'order',
+              isRead: Boolean(sn.isRead),
+              createdAt: sn.createdAt || new Date().toISOString(),
+            });
+          }
+        });
+      }
+
+      if (Array.isArray(localHistory)) {
+        localHistory.forEach((lh: any) => {
+          const id = String(lh.id || lh._id || lh.orderId || `${lh.title}_${lh.timestamp}`);
+          if (!seen.has(id)) {
+            seen.add(id);
+            combined.push({
+              id,
+              title: lh.title || 'Order Update',
+              message: lh.body || lh.message || '',
+              time: lh.timestamp ? new Date(lh.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Recently',
+              type: lh.type || 'order',
+              isRead: Boolean(lh.isRead),
+              createdAt: lh.timestamp || new Date().toISOString(),
+            });
+          }
+        });
+      }
+
+      combined.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      setNotifications(combined);
+    } catch (e) {
+      console.log('[HomeScreen] Failed to load notifications:', e);
+    }
+  };
+
   // Real-Time Socket.IO Listener to keep analytics dashboard fresh
   useEffect(() => {
     socketService.connect();
+    loadNotifications();
 
     const unsubscribeNewOrder = socketService.onNewOrder(() => {
       loadAnalytics();
+      loadNotifications();
     });
 
     const unsubscribeNewBooking = socketService.onNewBooking(() => {
       loadAnalytics();
+      loadNotifications();
     });
 
     const unsubscribeStatusChanged = socketService.onOrderStatusChanged(() => {
       loadAnalytics();
+      loadNotifications();
     });
 
     return () => {
@@ -470,14 +528,20 @@ export default function HomeScreen({
   };
 
   // Notification Handlers
-  const markAllAsRead = () => {
+  const markAllAsRead = async () => {
     setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
+    try {
+      await markNotificationAsRead();
+    } catch (_) {}
   };
 
-  const toggleRead = (id: string) => {
+  const toggleRead = async (id: string) => {
     setNotifications(prev =>
       prev.map(n => (n.id === id ? { ...n, isRead: true } : n))
     );
+    try {
+      await markNotificationAsRead(id);
+    } catch (_) {}
   };
 
   const [localItems, setLocalItems] = useState<any[]>(items || []);
@@ -594,7 +658,10 @@ export default function HomeScreen({
           </View>
         </View>
         <TouchableOpacity
-          onPress={() => setIsNotificationsVisible(true)}
+          onPress={() => {
+            setIsNotificationsVisible(true);
+            loadNotifications();
+          }}
           activeOpacity={0.7}
           style={tw`relative p-2`}>
           <Bell size={24} color={isDark ? '#F4F4F5' : '#1F2937'} />
@@ -886,7 +953,7 @@ export default function HomeScreen({
               elevation: 1,
             }
           ]}>
-            {items.length === 0 ? (
+            {safeItems.length === 0 ? (
               <View style={tw`py-6 items-center justify-center`}>
                 <Package size={32} color={isDark ? '#52525b' : '#9CA3AF'} style={tw`mb-2`} />
                 <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-500` : tw`text-gray-400`]}>
@@ -894,43 +961,48 @@ export default function HomeScreen({
                 </Text>
               </View>
             ) : (
-              items.slice(0, 3).map((prod: any, index: number, arr: any[]) => (
-                <View
-                  key={prod.id || prod._id || index}
-                  style={[
-                    tw`flex-row items-center py-3`,
-                    index < arr.length - 1 ? [tw`border-b`, isDark ? tw`border-zinc-800` : tw`border-gray-50`] : {},
-                  ]}>
-                  {prod.image ? (
-                    <Image source={{ uri: prod.image }} style={tw`w-12 h-12 rounded-xl mr-3 bg-gray-100`} />
-                  ) : (
-                    <View style={[tw`w-12 h-12 rounded-xl mr-3 items-center justify-center`, isDark ? tw`bg-zinc-800` : tw`bg-gray-100`]}>
-                      <Package size={20} color={isDark ? '#9CA3AF' : '#6B7280'} />
-                    </View>
-                  )}
-                  <View style={tw`flex-1`}>
-                    <Text style={[tw`font-bold text-sm`, isDark ? tw`text-white` : tw`text-gray-900`]} numberOfLines={1}>
-                      {prod.name}
-                    </Text>
-                    <View style={tw`flex-row items-center mt-1`}>
-                      <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-indigo-400` : tw`text-indigo-650`]}>
-                        {prod.category || 'Product'}
+              safeItems.slice(0, 5).map((prod: any, index: number, arr: any[]) => {
+                const isJob = String(prod.category || '').toLowerCase().includes('job');
+                return (
+                  <View
+                    key={prod.id || prod._id || index}
+                    style={[
+                      tw`flex-row items-center py-3`,
+                      index < arr.length - 1 ? [tw`border-b`, isDark ? tw`border-zinc-800` : tw`border-gray-50`] : {},
+                    ]}>
+                    {prod.image ? (
+                      <Image source={{ uri: prod.image }} style={tw`w-12 h-12 rounded-xl mr-3 bg-gray-100`} />
+                    ) : (
+                      <View style={[tw`w-12 h-12 rounded-xl mr-3 items-center justify-center`, isDark ? tw`bg-zinc-800` : tw`bg-gray-100`]}>
+                        <Package size={20} color={isDark ? '#9CA3AF' : '#6B7280'} />
+                      </View>
+                    )}
+                    <View style={tw`flex-1`}>
+                      <Text style={[tw`font-bold text-sm`, isDark ? tw`text-white` : tw`text-gray-900`]} numberOfLines={1}>
+                        {prod.name}
                       </Text>
-                      {prod.stock !== undefined ? (
-                        <>
-                          <View style={[tw`w-1 h-1 rounded-full mx-2`, isDark ? tw`bg-zinc-700` : tw`bg-gray-300`]} />
-                          <Text style={[tw`text-xs font-medium`, isDark ? tw`text-zinc-500` : tw`text-gray-500`]}>
-                            Stock: {prod.stock}
-                          </Text>
-                        </>
-                      ) : null}
+                      <View style={tw`flex-row items-center mt-1`}>
+                        <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-indigo-400` : tw`text-indigo-650`]}>
+                          {prod.category || 'Product'}
+                        </Text>
+                        {prod.stock !== undefined ? (
+                          <>
+                            <View style={[tw`w-1 h-1 rounded-full mx-2`, isDark ? tw`bg-zinc-700` : tw`bg-gray-300`]} />
+                            <Text style={[tw`text-xs font-medium`, isDark ? tw`text-zinc-500` : tw`text-gray-500`]}>
+                              {isJob ? `Openings: ${prod.stock}` : `Stock: ${prod.stock}`}
+                            </Text>
+                          </>
+                        ) : null}
+                      </View>
                     </View>
+                    <Text style={[tw`font-black text-sm ml-2`, isDark ? tw`text-white` : tw`text-gray-900`]}>
+                      {isJob
+                        ? (prod.salary ? `${prod.salary} LPA` : (prod.price ? `${prod.price} LPA` : 'Best in Industry'))
+                        : (prod.price ? (typeof prod.price === 'number' ? `₹${prod.price.toLocaleString('en-IN')}` : String(prod.price).startsWith('₹') ? prod.price : `₹${prod.price}`) : '₹0')}
+                    </Text>
                   </View>
-                  <Text style={[tw`font-black text-sm ml-2`, isDark ? tw`text-white` : tw`text-gray-900`]}>
-                    {prod.price ? (typeof prod.price === 'number' ? `₹${prod.price}` : String(prod.price).startsWith('₹') ? prod.price : `₹${prod.price}`) : '₹0'}
-                  </Text>
-                </View>
-              ))
+                );
+              })
             )}
           </View>
         </View>

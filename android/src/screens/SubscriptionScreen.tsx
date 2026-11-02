@@ -280,11 +280,12 @@ export default function SubscriptionScreen({
         showsVerticalScrollIndicator={false}
         contentContainerStyle={tw`p-5`}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}>
-        {/* Expense & Status Summary Cards */}
-        <View style={tw`flex-row justify-between mb-5`}>
+        {/* Expense & Status Summary Cards - 2x2 Grid matching Website */}
+        <View style={tw`flex-row flex-wrap justify-between mb-5`}>
+          {/* 1. Total Expenses */}
           <View
             style={[
-              tw`flex-1 mr-2 p-4 rounded-2xl border`,
+              tw`w-[48%] p-3.5 rounded-2xl border mb-3`,
               isDark ? tw`bg-zinc-900 border-zinc-800` : tw`bg-white border-gray-100`,
             ]}>
             <View style={tw`flex-row items-center justify-between mb-2`}>
@@ -298,9 +299,10 @@ export default function SubscriptionScreen({
             </Text>
           </View>
 
+          {/* 2. Active Plans */}
           <View
             style={[
-              tw`flex-1 mx-1 p-4 rounded-2xl border`,
+              tw`w-[48%] p-3.5 rounded-2xl border mb-3`,
               isDark ? tw`bg-zinc-900 border-zinc-800` : tw`bg-white border-gray-100`,
             ]}>
             <View style={tw`flex-row items-center justify-between mb-2`}>
@@ -314,9 +316,10 @@ export default function SubscriptionScreen({
             </Text>
           </View>
 
+          {/* 3. Renewal Due */}
           <View
             style={[
-              tw`flex-1 ml-2 p-4 rounded-2xl border`,
+              tw`w-[48%] p-3.5 rounded-2xl border`,
               isDark ? tw`bg-zinc-900 border-zinc-800` : tw`bg-white border-gray-100`,
             ]}>
             <View style={tw`flex-row items-center justify-between mb-2`}>
@@ -327,6 +330,25 @@ export default function SubscriptionScreen({
             </View>
             <Text style={[tw`text-xl font-extrabold text-amber-600`]}>
               {summary.expiredCount || subscriptionsList.filter(s => s.status !== 'active').length}
+            </Text>
+          </View>
+
+          {/* 4. Next Due Date (Issue 7 Fix) */}
+          <View
+            style={[
+              tw`w-[48%] p-3.5 rounded-2xl border`,
+              isDark ? tw`bg-zinc-900 border-zinc-800` : tw`bg-white border-gray-100`,
+            ]}>
+            <View style={tw`flex-row items-center justify-between mb-2`}>
+              <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]} numberOfLines={1}>
+                Next Due Date
+              </Text>
+              <Calendar size={16} color="#8B5CF6" />
+            </View>
+            <Text style={[tw`text-sm font-extrabold text-purple-600 mt-1`]} numberOfLines={1}>
+              {summary.nextExpiry
+                ? new Date(summary.nextExpiry).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+                : 'No Expiring Plans'}
             </Text>
           </View>
         </View>

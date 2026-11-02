@@ -260,9 +260,14 @@ export default function VendorPaymentsScreen({
                 isDark ? tw`bg-zinc-900 border-zinc-800` : tw`bg-white border-gray-100`,
               ]}>
               <View style={tw`flex-row items-center justify-between mb-2`}>
-                <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
-                  Gross Sales
-                </Text>
+                <View>
+                  <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
+                    Gross Sales
+                  </Text>
+                  <Text style={[tw`text-[10px]`, isDark ? tw`text-zinc-500` : tw`text-gray-400`]}>
+                    Total Order Value
+                  </Text>
+                </View>
                 <ArrowDownLeft size={16} color="#10B981" />
               </View>
               <Text style={[tw`text-xl font-extrabold text-emerald-600`]}>
