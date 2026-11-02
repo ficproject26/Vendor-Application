@@ -78,6 +78,32 @@ class VendorKeepAliveService : Service() {
             }
         }
 
+        fun start(context: Context) {
+            try {
+                val intent = Intent(context, VendorKeepAliveService::class.java).apply {
+                    action = ACTION_START
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+
+        fun stop(context: Context) {
+            try {
+                val intent = Intent(context, VendorKeepAliveService::class.java).apply {
+                    action = ACTION_STOP
+                }
+                context.startService(intent)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+
         fun markOrderHandled(orderId: String?) {
             if (!orderId.isNullOrBlank()) {
                 knownOrderIds.add(orderId.trim())
