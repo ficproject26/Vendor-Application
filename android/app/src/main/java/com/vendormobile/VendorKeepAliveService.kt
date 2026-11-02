@@ -18,7 +18,10 @@ import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
+import java.text.SimpleDateFormat
 import java.util.Collections
+import java.util.Locale
+import java.util.TimeZone
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -27,8 +30,9 @@ class VendorKeepAliveService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var pollerThread: Thread? = null
     private val isServiceActive = AtomicBoolean(false)
-    private val isSeeded = AtomicBoolean(false)
+    private val seededEndpoints: MutableSet<String> = Collections.newSetFromMap(ConcurrentHashMap())
     private var pollCycleCount = 0
+    private val serviceStartTime = System.currentTimeMillis()
 
     companion object {
         const val CHANNEL_ID = "vendor_keepalive_service_channel"
@@ -38,34 +42,39 @@ class VendorKeepAliveService : Service() {
         const val ACTION_START = "ACTION_START_KEEPALIVE"
         const val ACTION_STOP = "ACTION_STOP_KEEPALIVE"
 
+        const val KEY_HANDLED_ORDERS = "handled_order_ids_csv"
+
         var isRunning = false
 
         // Thread-safe set of known order IDs to prevent duplicate system alerts
         val knownOrderIds: MutableSet<String> = Collections.newSetFromMap(ConcurrentHashMap())
 
-        fun start(context: Context) {
+        fun loadHandledOrders(context: Context) {
             try {
-                val intent = Intent(context, VendorKeepAliveService::class.java).apply {
-                    action = ACTION_START
-                }
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    context.startForegroundService(intent)
-                } else {
-                    context.startService(intent)
+                val prefs = context.getSharedPreferences(OrderAlertModule.PREFS_NAME, Context.MODE_PRIVATE)
+                val csv = prefs.getString(KEY_HANDLED_ORDERS, "") ?: ""
+                if (csv.isNotBlank()) {
+                    csv.split(",").forEach { id ->
+                        val trimmed = id.trim()
+                        if (trimmed.isNotEmpty()) {
+                            knownOrderIds.add(trimmed)
+                        }
+                    }
                 }
             } catch (e: Exception) {
-                e.printStackTrace()
+                // Non-blocking
             }
         }
 
-        fun stop(context: Context) {
+        fun persistHandledOrders(context: Context) {
             try {
-                val intent = Intent(context, VendorKeepAliveService::class.java).apply {
-                    action = ACTION_STOP
-                }
-                context.startService(intent)
+                val prefs = context.getSharedPreferences(OrderAlertModule.PREFS_NAME, Context.MODE_PRIVATE)
+                val list = knownOrderIds.toList()
+                val recent = if (list.size > 500) list.takeLast(500) else list
+                val csv = recent.joinToString(",")
+                prefs.edit().putString(KEY_HANDLED_ORDERS, csv).apply()
             } catch (e: Exception) {
-                e.printStackTrace()
+                // Non-blocking
             }
         }
 
@@ -74,12 +83,23 @@ class VendorKeepAliveService : Service() {
                 knownOrderIds.add(orderId.trim())
             }
         }
+
+        fun markOrderHandledWithContext(context: Context?, orderId: String?) {
+            if (!orderId.isNullOrBlank()) {
+                val trimmed = orderId.trim()
+                knownOrderIds.add(trimmed)
+                if (context != null) {
+                    persistHandledOrders(context)
+                }
+            }
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
+        loadHandledOrders(this)
         createNotificationChannel()
     }
 
@@ -210,6 +230,23 @@ class VendorKeepAliveService : Service() {
         }
     }
 
+    private fun parseTimestamp(timeStr: String): Long {
+        if (timeStr.isBlank()) return 0L
+        return try {
+            if (timeStr.contains("T")) {
+                val clean = if (timeStr.endsWith("Z")) timeStr.substring(0, timeStr.length - 1) + "+0000" else timeStr
+                val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US).apply {
+                    timeZone = TimeZone.getTimeZone("UTC")
+                }
+                sdf.parse(clean.take(19))?.time ?: 0L
+            } else {
+                timeStr.toLongOrNull() ?: 0L
+            }
+        } catch (e: Exception) {
+            0L
+        }
+    }
+
     private fun pollEndpoint(
         baseUrl: String,
         token: String,
@@ -247,8 +284,8 @@ class VendorKeepAliveService : Service() {
                 val rootObj = JSONObject(sb.toString())
                 val dataArray: JSONArray = rootObj.optJSONArray("data") ?: JSONArray()
 
-                // On the very first run, seed existing IDs into knownOrderIds to prevent historical alerts
-                if (!isSeeded.get()) {
+                // On first poll for this endpoint, seed all existing IDs to strictly suppress historical notifications
+                if (!seededEndpoints.contains(endpointPath)) {
                     for (i in 0 until dataArray.length()) {
                         val item = dataArray.optJSONObject(i) ?: continue
                         val oid = item.optString("order_number").ifBlank {
@@ -262,9 +299,8 @@ class VendorKeepAliveService : Service() {
                             knownOrderIds.add(oid.trim())
                         }
                     }
-                    if (endpointPath == "/vendor/orders") {
-                        isSeeded.set(true)
-                    }
+                    seededEndpoints.add(endpointPath)
+                    persistHandledOrders(this@VendorKeepAliveService)
                     return
                 }
 
@@ -282,62 +318,83 @@ class VendorKeepAliveService : Service() {
                     if (primaryKey.isBlank()) continue
 
                     // Deduplication check: if seen by socket or previous poll, skip
-                    if (!knownOrderIds.contains(primaryKey) && !knownOrderIds.contains(orderId)) {
+                    if (knownOrderIds.contains(primaryKey) || (orderId.isNotBlank() && knownOrderIds.contains(orderId))) {
+                        continue
+                    }
+
+                    // Strict historical timestamp verification: items created before service started are historical
+                    val createdAtStr = item.optString("createdAt").ifBlank {
+                        item.optString("created_at").ifBlank {
+                            item.optString("date").ifBlank {
+                                item.optString("order_date")
+                            }
+                        }
+                    }
+                    val itemTimestamp = parseTimestamp(createdAtStr)
+                    if (itemTimestamp > 0 && itemTimestamp < (serviceStartTime - 30_000L)) {
+                        // Historical record: mark as known so it is never alerted, but do not show notification
                         knownOrderIds.add(primaryKey)
                         if (orderId.isNotBlank()) knownOrderIds.add(orderId)
+                        continue
+                    }
 
-                        // Extract transaction details
-                        val custName = item.optString("customer_name").ifBlank {
-                            item.optString("memberName").ifBlank {
-                                item.optString("candidateName", "Customer")
+                    // Genuinely new incoming item: record and post notification
+                    knownOrderIds.add(primaryKey)
+                    if (orderId.isNotBlank()) knownOrderIds.add(orderId)
+                    persistHandledOrders(this@VendorKeepAliveService)
+
+                    // Extract transaction details
+                    val custName = item.optString("customer_name").ifBlank {
+                        item.optString("memberName").ifBlank {
+                            item.optString("candidateName", "Customer")
+                        }
+                    }
+                    val amount = item.optDouble("totalAmount", item.optDouble("amount", item.optDouble("finalAmount", 0.0)))
+                    val rawCategory = item.optString("category").ifBlank {
+                        item.optString("type", if (isJob) "Jobs" else if (isBooking) "Bookings" else "Orders")
+                    }
+
+                    val segment = if (isJob || rawCategory.contains("Job", true)) {
+                        "Jobs"
+                    } else if (isBooking || rawCategory.contains("Booking", true) || rawCategory.contains("Stay", true) || rawCategory.contains("Travel", true) || rawCategory.contains("Service", true)) {
+                        "Bookings"
+                    } else {
+                        "Orders"
+                    }
+
+                    var itemSummary = if (isJob) "Job Application" else if (isBooking) "Service Booking" else "Order Item"
+                    val itemsArr = item.optJSONArray("items")
+                    if (itemsArr != null && itemsArr.length() > 0) {
+                        val firstIt = itemsArr.optJSONObject(0)
+                        val itName = firstIt?.optString("name", "Item") ?: "Item"
+                        val itQty = firstIt?.optInt("quantity", 1) ?: 1
+                        itemSummary = "${itQty}x $itName"
+                    } else {
+                        val prodDetails = item.optString("product_details").ifBlank {
+                            item.optString("serviceName").ifBlank {
+                                item.optString("jobTitle")
                             }
                         }
-                        val amount = item.optDouble("totalAmount", item.optDouble("amount", item.optDouble("finalAmount", 0.0)))
-                        val rawCategory = item.optString("category").ifBlank {
-                            item.optString("type", if (isJob) "Jobs" else if (isBooking) "Bookings" else "Orders")
+                        if (prodDetails.isNotBlank()) {
+                            itemSummary = prodDetails
                         }
+                    }
 
-                        val segment = if (isJob || rawCategory.contains("Job", true)) {
-                            "Jobs"
-                        } else if (isBooking || rawCategory.contains("Booking", true) || rawCategory.contains("Stay", true) || rawCategory.contains("Travel", true) || rawCategory.contains("Service", true)) {
-                            "Bookings"
-                        } else {
-                            "Orders"
-                        }
+                    val displayId = if (orderNumber.isNotBlank()) orderNumber else orderId
+                    val titlePrefix = if (isJob) "Job Application" else if (isBooking) "Booking" else "Order"
+                    val title = "New $titlePrefix (#$displayId)"
+                    val amountStr = if (amount > 0) " • ₹${String.format("%.0f", amount)}" else ""
+                    val body = "$custName placed a new $titlePrefix$amountStr • $itemSummary"
 
-                        var itemSummary = if (isJob) "Job Application" else if (isBooking) "Service Booking" else "Order Item"
-                        val itemsArr = item.optJSONArray("items")
-                        if (itemsArr != null && itemsArr.length() > 0) {
-                            val firstIt = itemsArr.optJSONObject(0)
-                            val itName = firstIt?.optString("name", "Item") ?: "Item"
-                            val itQty = firstIt?.optInt("quantity", 1) ?: 1
-                            itemSummary = "${itQty}x $itName"
-                        } else {
-                            val prodDetails = item.optString("product_details").ifBlank {
-                                item.optString("serviceName").ifBlank {
-                                    item.optString("jobTitle")
-                                }
-                            }
-                            if (prodDetails.isNotBlank()) {
-                                itemSummary = prodDetails
-                            }
-                        }
-
-                        val displayId = if (orderNumber.isNotBlank()) orderNumber else orderId
-                        val titlePrefix = if (isJob) "Job Application" else if (isBooking) "Booking" else "Order"
-                        val title = "New $titlePrefix (#$displayId)"
-                        val amountStr = if (amount > 0) " • ₹${String.format("%.0f", amount)}" else ""
-                        val body = "$custName placed a new $titlePrefix$amountStr • $itemSummary"
-
-                        // Trigger native Android System Notification
-                        OrderAlertModule.postSystemNotification(
-                            this@VendorKeepAliveService,
-                            title,
-                            body,
-                            orderId,
-                            rawCategory,
-                            segment
-                        )
+                    // Trigger native Android System Notification
+                    OrderAlertModule.postSystemNotification(
+                        this@VendorKeepAliveService,
+                        title,
+                        body,
+                        orderId,
+                        rawCategory,
+                        segment
+                    )
                     }
                 }
             }

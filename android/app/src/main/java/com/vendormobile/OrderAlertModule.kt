@@ -170,13 +170,12 @@ class OrderAlertModule(private val reactContext: ReactApplicationContext) :
                     .setVibrate(longArrayOf(0, 400, 200, 400))
                     .setDefaults(NotificationCompat.DEFAULT_LIGHTS or NotificationCompat.DEFAULT_VIBRATE)
 
-                val notificationId = ((System.currentTimeMillis() + title.hashCode() + targetId.hashCode()) % 100000).toInt().let {
-                    if (it < 0) -it else it
-                }
+                val stableKey = if (targetId.isNotBlank()) targetId.trim() else title.trim()
+                val notificationId = Math.abs(stableKey.hashCode() % 90000) + 10000
                 notificationManager.notify(notificationId, builder.build())
 
                 // Mark order handled to prevent duplicate background notifications
-                VendorKeepAliveService.markOrderHandled(targetId)
+                VendorKeepAliveService.markOrderHandledWithContext(context, targetId)
             } catch (e: Exception) {
                 e.printStackTrace()
             }
@@ -393,7 +392,7 @@ class OrderAlertModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun markOrderHandled(orderId: String) {
-        VendorKeepAliveService.markOrderHandled(orderId)
+        VendorKeepAliveService.markOrderHandledWithContext(reactContext, orderId)
     }
 
     @ReactMethod

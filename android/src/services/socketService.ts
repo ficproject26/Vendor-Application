@@ -23,6 +23,28 @@ class VendorSocketService {
   private activeToken: string | null = null;
   private pollInterval: ReturnType<typeof setInterval> | null = null;
   private isInitialSeeded: boolean = false;
+  private readonly sessionStartTime: number = Date.now();
+
+  constructor() {
+    this.hydrateProcessedIds();
+  }
+
+  private async hydrateProcessedIds() {
+    try {
+      const currentUser = getVendorUser();
+      const vendorId = currentUser?.vendorId || currentUser?._id || currentUser?.id || 'default';
+      const cached = await sessionManager.getVendorCache(vendorId, 'handled_notification_ids', 7 * 86400000);
+      if (Array.isArray(cached)) {
+        cached.forEach((id: any) => {
+          if (id) {
+            const str = String(id).trim();
+            this.processedOrderIds.add(str);
+            soundNotificationService.markOrderHandled(str);
+          }
+        });
+      }
+    } catch {}
+  }
 
   /**
    * Determine primary socket server URL
@@ -37,19 +59,29 @@ class VendorSocketService {
    */
   seedInitialOrders(orders: any[]) {
     if (Array.isArray(orders)) {
+      const currentUser = getVendorUser();
+      const vendorId = currentUser?.vendorId || currentUser?._id || currentUser?.id || 'default';
       orders.forEach((o) => {
-        const id = (o._id || o.id || o.order_number || o.applicationId || '').toString();
+        const id = (o._id || o.id || o.order_number || o.applicationId || '').toString().trim();
+        const num = (o.order_number || '').toString().trim();
         const st = String(o.status || o.orderStatus || '');
         if (id) {
           this.processedOrderIds.add(id);
+          soundNotificationService.markOrderHandled(id);
           if (st) this.orderStatusMap.set(id, st);
         }
-        if (o.order_number) {
-          this.processedOrderIds.add(o.order_number.toString());
-          if (st) this.orderStatusMap.set(o.order_number.toString(), st);
+        if (num) {
+          this.processedOrderIds.add(num);
+          soundNotificationService.markOrderHandled(num);
+          if (st) this.orderStatusMap.set(num, st);
         }
       });
       this.isInitialSeeded = true;
+      sessionManager.saveVendorCache(
+        vendorId,
+        'handled_notification_ids',
+        Array.from(this.processedOrderIds).slice(-500)
+      ).catch(() => {});
     }
   }
 
@@ -305,6 +337,19 @@ class VendorSocketService {
       return false; // Scoped to another vendor
     }
 
+    // Strict real-time timestamp check: historical records created before session start must never trigger notifications
+    const createdDateRaw = rawItem.createdAt || rawItem.created_at || rawItem.date || rawItem.order_date;
+    if (createdDateRaw) {
+      const parsedTime = new Date(createdDateRaw).getTime();
+      if (!isNaN(parsedTime) && parsedTime > 0 && parsedTime < (this.sessionStartTime - 30000)) {
+        console.log(`⏳ [processNewItem] Suppressed historical notification (${new Date(parsedTime).toISOString()} < session start):`, orderId || orderNumber);
+        if (orderId) this.processedOrderIds.add(orderId);
+        if (orderNumber) this.processedOrderIds.add(orderNumber);
+        soundNotificationService.markOrderHandled(orderId || orderNumber);
+        return false;
+      }
+    }
+
     // Record in deduplication set
     if (orderId) {
       this.processedOrderIds.add(orderId);
@@ -419,10 +464,23 @@ class VendorSocketService {
             const onum = (item.order_number || '').toString();
             const currentStatus = String(item.status || item.orderStatus || '');
 
+            const createdRaw = item.createdAt || item.created_at || item.date || item.order_date;
+            const parsedTime = createdRaw ? new Date(createdRaw).getTime() : 0;
+            const isHistorical = parsedTime > 0 && parsedTime < (this.sessionStartTime - 30000);
+
             if ((oid && !this.processedOrderIds.has(oid)) && (onum && !this.processedOrderIds.has(onum))) {
-              this.processNewItem(item);
-              if (oid && currentStatus) this.orderStatusMap.set(oid, currentStatus);
-              if (onum && currentStatus) this.orderStatusMap.set(onum, currentStatus);
+              if (isHistorical) {
+                // Historical record: register without triggering notification
+                if (oid) this.processedOrderIds.add(oid);
+                if (onum) this.processedOrderIds.add(onum);
+                soundNotificationService.markOrderHandled(oid || onum);
+                if (oid && currentStatus) this.orderStatusMap.set(oid, currentStatus);
+                if (onum && currentStatus) this.orderStatusMap.set(onum, currentStatus);
+              } else {
+                this.processNewItem(item);
+                if (oid && currentStatus) this.orderStatusMap.set(oid, currentStatus);
+                if (onum && currentStatus) this.orderStatusMap.set(onum, currentStatus);
+              }
             } else {
               // Existing order: check if status changed
               const key = oid || onum;
@@ -705,7 +763,9 @@ class VendorSocketService {
    */
   markOrderHandled(orderId: string) {
     if (orderId) {
-      this.processedOrderIds.add(orderId.toString());
+      const sId = orderId.toString().trim();
+      this.processedOrderIds.add(sId);
+      soundNotificationService.markOrderHandled(sId);
       soundNotificationService.stopNewOrderSound();
     }
   }

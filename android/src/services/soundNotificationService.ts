@@ -25,6 +25,7 @@ class SoundNotificationService {
   private isSoundPlaying: boolean = false;
   private lastSoundPlayedAt: number = 0;
   private recentNotificationKeys: Map<string, number> = new Map();
+  private handledOrderIds: Set<string> = new Set();
 
   constructor() {
     // Proactively initialize channels on native side
@@ -88,6 +89,11 @@ class SoundNotificationService {
       } = payload;
 
       // Deduplication guard against rapid duplicates within 3 seconds
+      const cleanTargetId = (targetId || '').trim();
+      if (cleanTargetId && this.handledOrderIds.has(cleanTargetId)) {
+        return;
+      }
+
       const dedupeKey = `${title}_${targetId}_${category}`;
       const now = Date.now();
       const lastSent = this.recentNotificationKeys.get(dedupeKey) || 0;
@@ -95,6 +101,10 @@ class SoundNotificationService {
         return;
       }
       this.recentNotificationKeys.set(dedupeKey, now);
+      if (cleanTargetId) {
+        this.handledOrderIds.add(cleanTargetId);
+        this.markOrderHandled(cleanTargetId);
+      }
 
       // Clean old deduplication entries
       if (this.recentNotificationKeys.size > 50) {
@@ -319,6 +329,7 @@ class SoundNotificationService {
    * Clear vendor credentials from native SharedPreferences
    */
   clearVendorSession() {
+    this.handledOrderIds.clear();
     try {
       if (OrderAlertModule && typeof OrderAlertModule.clearVendorSession === 'function') {
         OrderAlertModule.clearVendorSession();
@@ -332,9 +343,12 @@ class SoundNotificationService {
    * Mark an order as handled in native memory so background poller does not repeat
    */
   markOrderHandled(orderId: string) {
+    if (!orderId) return;
+    const str = String(orderId).trim();
+    if (str) this.handledOrderIds.add(str);
     try {
       if (OrderAlertModule && typeof OrderAlertModule.markOrderHandled === 'function') {
-        OrderAlertModule.markOrderHandled(orderId);
+        OrderAlertModule.markOrderHandled(str);
       }
     } catch (e: any) {}
   }

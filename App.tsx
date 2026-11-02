@@ -412,6 +412,7 @@ function App() {
   const [isOrderActionProcessing, setIsOrderActionProcessing] = useState(false);
   const modalTimerRef = useRef<any>(null);
   const modalQueueRef = useRef<VendorActivityNotification[]>([]);
+  const appStartupTimeRef = useRef<number>(Date.now());
 
   const clearModalTimers = useCallback(() => {
     if (modalTimerRef.current) {
@@ -447,6 +448,13 @@ function App() {
 
   const enqueueOrDisplayModalNotification = useCallback((notif: VendorActivityNotification) => {
     if (!notif) return;
+    // Strictly suppress modal popups for historical records created prior to current session launch
+    const notifReceivedAt = notif.receivedAt || 0;
+    if (notifReceivedAt > 0 && notifReceivedAt < appStartupTimeRef.current - 15000) {
+      console.log('[App] Suppressed historical modal for:', notif.id);
+      return;
+    }
+
     const notifId = String(notif.id || notif.raw?.id || notif.raw?._id || notif.raw?.order_number || '');
     if (isActivityModalVisible && modalNotification) {
       const isAlreadyInQueue = modalQueueRef.current.some(it => {
