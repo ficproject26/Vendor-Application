@@ -395,7 +395,6 @@ class VendorKeepAliveService : Service() {
                         rawCategory,
                         segment
                     )
-                    }
                 }
             }
         } catch (e: Exception) {
