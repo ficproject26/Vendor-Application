@@ -1,5 +1,6 @@
 package com.vendormobile
 
+import android.app.AlarmManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -33,6 +34,7 @@ class VendorKeepAliveService : Service() {
     private val seededEndpoints: MutableSet<String> = Collections.newSetFromMap(ConcurrentHashMap())
     private var pollCycleCount = 0
     private val serviceStartTime = System.currentTimeMillis()
+    private var isExplicitlyStopped = false
 
     companion object {
         const val CHANNEL_ID = "vendor_keepalive_service_channel"
@@ -131,12 +133,49 @@ class VendorKeepAliveService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
+            isExplicitlyStopped = true
             stopForegroundService()
             return START_NOT_STICKY
         }
 
+        isExplicitlyStopped = false
         startForegroundServiceInternal()
         return START_STICKY
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        try {
+            if (!isExplicitlyStopped) {
+                val restartIntent = Intent(applicationContext, this.javaClass).apply {
+                    setPackage(packageName)
+                    action = ACTION_START
+                }
+                val pendingIntent = PendingIntent.getService(
+                    applicationContext,
+                    1,
+                    restartIntent,
+                    PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE
+                )
+                val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+                val triggerAt = System.currentTimeMillis() + 1500L
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    alarmManager.setExactAndAllowWhileIdle(
+                        AlarmManager.RTC_WAKEUP,
+                        triggerAt,
+                        pendingIntent
+                    )
+                } else {
+                    alarmManager.set(
+                        AlarmManager.RTC_WAKEUP,
+                        triggerAt,
+                        pendingIntent
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        super.onTaskRemoved(rootIntent)
     }
 
     private fun createNotificationChannel() {
@@ -457,6 +496,26 @@ class VendorKeepAliveService : Service() {
     }
 
     override fun onDestroy() {
+        if (!isExplicitlyStopped) {
+            try {
+                val restartIntent = Intent(applicationContext, this.javaClass).apply {
+                    setPackage(packageName)
+                    action = ACTION_START
+                }
+                val pendingIntent = PendingIntent.getService(
+                    applicationContext,
+                    2,
+                    restartIntent,
+                    PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE
+                )
+                val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+                alarmManager.set(
+                    AlarmManager.RTC_WAKEUP,
+                    System.currentTimeMillis() + 2000L,
+                    pendingIntent
+                )
+            } catch (e: Exception) {}
+        }
         stopForegroundService()
         super.onDestroy()
     }
