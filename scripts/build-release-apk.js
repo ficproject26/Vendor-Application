@@ -1,7 +1,7 @@
 /**
- * Automated Release APK Build & Distribution Script
- * Vendor Mobile Application
- */
+* Automated Release APK Build & Distribution Script
+* Vendor Mobile Application
+*/
 
 const { execSync } = require('child_process');
 const fs = require('fs');
@@ -94,7 +94,7 @@ async function buildRelease() {
   // Clean previous output APK to guarantee fresh packaging
   const oldApk = path.join(ANDROID_DIR, 'app', 'build', 'outputs', 'apk', 'release', 'app-release.apk');
   if (fs.existsSync(oldApk)) {
-    try { fs.unlinkSync(oldApk); } catch (e) {}
+    try { fs.unlinkSync(oldApk); } catch (e) { }
   }
 
   // Step 3: Gradle assembleRelease

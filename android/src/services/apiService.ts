@@ -1568,4 +1568,32 @@ export const fetchVendorRatings = async () => {
   return data;
 };
 
+// ==========================================
+// Authoritative Indian PIN & Mobile Validation Helpers
+// ==========================================
+
+export const isValidIndianPincode = (pincode: string | number | undefined | null): boolean => {
+  if (!pincode) return false;
+  const pinStr = String(pincode).trim();
+  // Must be exactly 6 numeric digits, starting with 1-9
+  return /^[1-9][0-9]{5}$/.test(pinStr);
+};
+
+export const isValidIndianMobile = (phone: string | number | undefined | null): boolean => {
+  if (!phone) return false;
+  const digits = String(phone).replace(/[^0-9]/g, '');
+  // Extract last 10 digits in case +91 or 0 prefix was supplied
+  const last10 = digits.slice(-10);
+  return last10.length === 10 && /^[6-9][0-9]{9}$/.test(last10);
+};
+
+export const sanitizeIndianPincode = (val: string): string => {
+  return String(val || '').replace(/[^0-9]/g, '').slice(0, 6);
+};
+
+export const sanitizeIndianMobile = (val: string): string => {
+  return String(val || '').replace(/[^0-9]/g, '').slice(0, 10);
+};
+
+
 

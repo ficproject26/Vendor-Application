@@ -1,5 +1,5 @@
 import React, {useState, useEffect} from 'react';
-import { getVendorUser, updateProfile, fetchProfile, updateAcceptingOrders } from '../services/apiService';
+import { getVendorUser, updateProfile, fetchProfile, updateAcceptingOrders, isValidIndianPincode, isValidIndianMobile, sanitizeIndianPincode, sanitizeIndianMobile } from '../services/apiService';
 import sessionManager from '../services/sessionManager';
 import {
   View,
@@ -213,8 +213,22 @@ export default function ProfileScreen({
   const handleSaveSettings = async () => {
     if (mobileNumber) {
       const cleanMob = mobileNumber.replace(/[^0-9]/g, '');
-      if (!/^[6-9]\d{9}$/.test(cleanMob)) {
+      if (!isValidIndianMobile(cleanMob)) {
         Alert.alert('Invalid Mobile Number', 'Please enter a valid 10-digit Indian mobile number starting with 6, 7, 8, or 9.');
+        return;
+      }
+    }
+    if (alternateNumber) {
+      const cleanAlt = alternateNumber.replace(/[^0-9]/g, '');
+      if (!isValidIndianMobile(cleanAlt)) {
+        Alert.alert('Invalid Alternate Number', 'Please enter a valid 10-digit Indian mobile number starting with 6, 7, 8, or 9.');
+        return;
+      }
+    }
+    if (postalCode) {
+      const cleanPin = postalCode.replace(/[^0-9]/g, '');
+      if (!isValidIndianPincode(cleanPin)) {
+        Alert.alert('Invalid Postal Code', 'Please enter a valid 6-digit Indian PIN code (cannot start with 0).');
         return;
       }
     }
@@ -896,9 +910,10 @@ export default function ProfileScreen({
                   <TextInput
                     style={tw`bg-white border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-800 font-semibold`}
                     value={mobileNumber}
-                    onChangeText={setMobileNumber}
-                    placeholder="Enter mobile number"
+                    onChangeText={(val) => setMobileNumber(sanitizeIndianMobile(val))}
+                    placeholder="Enter 10-digit mobile number"
                     keyboardType="phone-pad"
+                    maxLength={10}
                   />
                 </View>
 
@@ -907,9 +922,10 @@ export default function ProfileScreen({
                   <TextInput
                     style={tw`bg-white border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-800 font-semibold`}
                     value={telephone}
-                    onChangeText={setTelephone}
+                    onChangeText={(val) => setTelephone(val.replace(/[^0-9]/g, '').slice(0, 11))}
                     placeholder="Enter telephone number"
                     keyboardType="phone-pad"
+                    maxLength={11}
                   />
                 </View>
 
@@ -928,9 +944,10 @@ export default function ProfileScreen({
                   <TextInput
                     style={tw`bg-white border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-800 font-semibold`}
                     value={alternateNumber}
-                    onChangeText={setAlternateNumber}
-                    placeholder="Enter alternate number"
+                    onChangeText={(val) => setAlternateNumber(sanitizeIndianMobile(val))}
+                    placeholder="Enter 10-digit alternate number"
                     keyboardType="phone-pad"
+                    maxLength={10}
                   />
                 </View>
               </View>
@@ -996,9 +1013,10 @@ export default function ProfileScreen({
                   <TextInput
                     style={tw`bg-white border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-800 font-semibold`}
                     value={postalCode}
-                    onChangeText={setPostalCode}
-                    placeholder="Enter postal code"
+                    onChangeText={(val) => setPostalCode(sanitizeIndianPincode(val))}
+                    placeholder="Enter 6-digit PIN code"
                     keyboardType="numeric"
+                    maxLength={6}
                   />
                 </View>
 

@@ -1,5 +1,5 @@
 import React, {useState, useEffect} from 'react';
-import { fetchDeliveryPartners, createDeliveryPartner, getVendorUser } from '../services/apiService';
+import { fetchDeliveryPartners, createDeliveryPartner, getVendorUser, isValidIndianPincode, isValidIndianMobile, sanitizeIndianPincode, sanitizeIndianMobile } from '../services/apiService';
 import sessionManager from '../services/sessionManager';
 import {
   View,
@@ -230,6 +230,21 @@ export default function DeliveryPartnersScreen({
       Alert.alert('Required', 'Please enter Mobile Number in Personal Information');
       return;
     }
+    if (!isValidIndianMobile(formState.mobileNumber)) {
+      setActiveFormTab(0);
+      Alert.alert('Invalid Mobile Number', 'Please enter a valid 10-digit Indian mobile number starting with 6, 7, 8, or 9');
+      return;
+    }
+    if (formState.emergencyContact && !isValidIndianMobile(formState.emergencyContact)) {
+      setActiveFormTab(0);
+      Alert.alert('Invalid Emergency Contact', 'Please enter a valid 10-digit Indian mobile number for emergency contact');
+      return;
+    }
+    if (formState.pincode && !isValidIndianPincode(formState.pincode)) {
+      setActiveFormTab(1);
+      Alert.alert('Invalid Pincode', 'Please enter a valid 6-digit Indian PIN code (cannot start with 0)');
+      return;
+    }
 
     setIsSubmitting(true);
     try {
@@ -299,9 +314,10 @@ export default function DeliveryPartnersScreen({
                   isDark ? tw`bg-zinc-950 border-zinc-700 text-white` : tw`bg-gray-50 border-gray-200 text-gray-800`,
                 ]}
                 value={formState.mobileNumber}
-                onChangeText={v => updateForm('mobileNumber', v)}
-                placeholder="+91 Mobile Number"
+                onChangeText={v => updateForm('mobileNumber', sanitizeIndianMobile(v))}
+                placeholder="10-digit Mobile Number"
                 keyboardType="phone-pad"
+                maxLength={10}
                 placeholderTextColor={isDark ? '#52525b' : '#9CA3AF'}
               />
             </View>
@@ -376,9 +392,10 @@ export default function DeliveryPartnersScreen({
                   isDark ? tw`bg-zinc-950 border-zinc-700 text-white` : tw`bg-gray-50 border-gray-200 text-gray-800`,
                 ]}
                 value={formState.emergencyContact}
-                onChangeText={v => updateForm('emergencyContact', v)}
-                placeholder="+91 Contact Number"
+                onChangeText={v => updateForm('emergencyContact', sanitizeIndianMobile(v))}
+                placeholder="10-digit Emergency Contact Number"
                 keyboardType="phone-pad"
+                maxLength={10}
                 placeholderTextColor={isDark ? '#52525b' : '#9CA3AF'}
               />
             </View>
@@ -434,9 +451,10 @@ export default function DeliveryPartnersScreen({
                   isDark ? tw`bg-zinc-950 border-zinc-700 text-white` : tw`bg-gray-50 border-gray-200 text-gray-800`,
                 ]}
                 value={formState.pincode}
-                onChangeText={v => updateForm('pincode', v)}
-                placeholder="e.g. 110001"
+                onChangeText={v => updateForm('pincode', sanitizeIndianPincode(v))}
+                placeholder="6-digit PIN code"
                 keyboardType="numeric"
+                maxLength={6}
                 placeholderTextColor={isDark ? '#52525b' : '#9CA3AF'}
               />
             </View>

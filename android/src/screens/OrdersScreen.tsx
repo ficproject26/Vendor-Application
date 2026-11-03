@@ -2914,57 +2914,65 @@ export default function OrdersScreen({
                       </View>
 
                       {/* Email */}
-                      <View style={[tw`flex-row items-center py-2.5 border-t`, isDark ? tw`border-zinc-850` : tw`border-gray-50`]}>
-                        <Mail size={14} color="#6B7280" style={tw`mr-2.5`} />
-                        <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-300` : tw`text-gray-700`]}>
-                          {selectedOrder.candidateEmail || selectedOrder.rawOrder?.applicant_email || selectedOrder.rawOrder?.candidateEmail || 'uma@connectapp.com'}
-                        </Text>
-                      </View>
+                      {(selectedOrder.candidateEmail || selectedOrder.rawOrder?.applicant_email || selectedOrder.rawOrder?.candidateEmail || selectedOrder.rawOrder?.customer_email) ? (
+                        <View style={[tw`flex-row items-center py-2.5 border-t`, isDark ? tw`border-zinc-850` : tw`border-gray-50`]}>
+                          <Mail size={14} color="#6B7280" style={tw`mr-2.5`} />
+                          <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-300` : tw`text-gray-700`]}>
+                            {selectedOrder.candidateEmail || selectedOrder.rawOrder?.applicant_email || selectedOrder.rawOrder?.candidateEmail || selectedOrder.rawOrder?.customer_email}
+                          </Text>
+                        </View>
+                      ) : null}
 
                       {/* Badges: Education & Experience */}
                       <View style={[tw`flex-row flex-wrap gap-2 py-3 border-t`, isDark ? tw`border-zinc-850` : tw`border-gray-50`]}>
-                        <View style={[tw`flex-row items-center px-3 py-1.5 rounded-xl border`, isDark ? tw`bg-zinc-900 border-zinc-800` : tw`bg-slate-50 border-slate-200`]}>
-                          <GraduationCap size={14} color="#4F46E5" style={tw`mr-2`} />
-                          <Text style={[tw`text-xs font-bold`, isDark ? tw`text-zinc-200` : tw`text-slate-800`]}>
-                            {selectedOrder.candidateEducation || selectedOrder.rawOrder?.applicant_education || 'B.Tech in Computer Science'}
-                          </Text>
-                        </View>
-                        <View style={[tw`flex-row items-center px-3 py-1.5 rounded-xl border`, isDark ? tw`bg-zinc-900 border-zinc-800` : tw`bg-amber-50 border-amber-200`]}>
-                          <Clock size={14} color="#D97706" style={tw`mr-2`} />
-                          <Text style={[tw`text-xs font-bold text-amber-800 dark:text-amber-400`]}>
-                            {selectedOrder.candidateExperience || selectedOrder.rawOrder?.applicant_experience || '2years'}
-                          </Text>
-                        </View>
+                        {(selectedOrder.candidateEducation || selectedOrder.rawOrder?.applicant_education || selectedOrder.rawOrder?.education) ? (
+                          <View style={[tw`flex-row items-center px-3 py-1.5 rounded-xl border`, isDark ? tw`bg-zinc-900 border-zinc-800` : tw`bg-slate-50 border-slate-200`]}>
+                            <GraduationCap size={14} color="#4F46E5" style={tw`mr-2`} />
+                            <Text style={[tw`text-xs font-bold`, isDark ? tw`text-zinc-200` : tw`text-slate-800`]}>
+                              {selectedOrder.candidateEducation || selectedOrder.rawOrder?.applicant_education || selectedOrder.rawOrder?.education}
+                            </Text>
+                          </View>
+                        ) : null}
+                        {(selectedOrder.candidateExperience || selectedOrder.rawOrder?.applicant_experience || selectedOrder.rawOrder?.experience) ? (
+                          <View style={[tw`flex-row items-center px-3 py-1.5 rounded-xl border`, isDark ? tw`bg-zinc-900 border-zinc-800` : tw`bg-amber-50 border-amber-200`]}>
+                            <Clock size={14} color="#D97706" style={tw`mr-2`} />
+                            <Text style={[tw`text-xs font-bold text-amber-800 dark:text-amber-400`]}>
+                              {selectedOrder.candidateExperience || selectedOrder.rawOrder?.applicant_experience || selectedOrder.rawOrder?.experience}
+                            </Text>
+                          </View>
+                        ) : null}
                       </View>
 
                       {/* Resume Box with Download Option */}
-                      <View style={[tw`p-3.5 rounded-xl border mt-2`, isDark ? tw`bg-zinc-900 border-zinc-800` : tw`bg-blue-50/50 border-blue-100`]}>
-                        <View style={tw`flex-row items-center justify-between`}>
-                          <View style={tw`flex-row items-center flex-1 mr-2`}>
-                            <View style={[tw`w-9 h-9 rounded-lg items-center justify-center mr-3`, isDark ? tw`bg-zinc-800` : tw`bg-white`]}>
-                              <FileText size={18} color="#0284C7" />
+                      {(selectedOrder.candidateResume || selectedOrder.rawOrder?.resume_name || selectedOrder.rawOrder?.candidateResume || selectedOrder.rawOrder?.resumeUrl) ? (
+                        <View style={[tw`p-3.5 rounded-xl border mt-2`, isDark ? tw`bg-zinc-900 border-zinc-800` : tw`bg-blue-50/50 border-blue-100`]}>
+                          <View style={tw`flex-row items-center justify-between`}>
+                            <View style={tw`flex-row items-center flex-1 mr-2`}>
+                              <View style={[tw`w-9 h-9 rounded-lg items-center justify-center mr-3`, isDark ? tw`bg-zinc-800` : tw`bg-white`]}>
+                                <FileText size={18} color="#0284C7" />
+                              </View>
+                              <View style={tw`flex-1`}>
+                                <Text style={[tw`text-xs font-bold`, isDark ? tw`text-zinc-200` : tw`text-slate-800`]} numberOfLines={1}>
+                                  {selectedOrder.candidateResume || selectedOrder.rawOrder?.resume_name || selectedOrder.rawOrder?.candidateResume || 'Resume.pdf'}
+                                </Text>
+                                <Text style={tw`text-[10px] text-gray-400`}>Attached Resume • Submitted</Text>
+                              </View>
                             </View>
-                            <View style={tw`flex-1`}>
-                              <Text style={[tw`text-xs font-bold`, isDark ? tw`text-zinc-200` : tw`text-slate-800`]} numberOfLines={1}>
-                                {selectedOrder.candidateResume || selectedOrder.rawOrder?.resume_name || 'ForgeConnect_Resume.pdf'}
-                              </Text>
-                              <Text style={tw`text-[10px] text-gray-400`}>Attached Resume • Submitted</Text>
-                            </View>
-                          </View>
 
-                          {/* Download Button */}
-                          <TouchableOpacity
-                            activeOpacity={0.7}
-                            onPress={() => {
-                              const rName = selectedOrder.candidateResume || selectedOrder.rawOrder?.resume_name || 'ForgeConnect_Resume.pdf';
-                              Alert.alert('Download Resume', `Downloading "${rName}" to your device...\n\nStatus: Saved to Downloads folder!`);
-                            }}
-                            style={[tw`flex-row items-center px-3 py-2 rounded-lg bg-indigo-600 shadow-sm`]}>
-                            <Download size={13} color="#FFFFFF" style={tw`mr-1.5`} />
-                            <Text style={tw`text-white font-bold text-xs`}>Download</Text>
-                          </TouchableOpacity>
+                            {/* Download Button */}
+                            <TouchableOpacity
+                              activeOpacity={0.7}
+                              onPress={() => {
+                                const rName = selectedOrder.candidateResume || selectedOrder.rawOrder?.resume_name || selectedOrder.rawOrder?.candidateResume || 'Resume.pdf';
+                                Alert.alert('Download Resume', `Downloading "${rName}" to your device...\n\nStatus: Saved to Downloads folder!`);
+                              }}
+                              style={[tw`flex-row items-center px-3 py-2 rounded-lg bg-indigo-600 shadow-sm`]}>
+                              <Download size={13} color="#FFFFFF" style={tw`mr-1.5`} />
+                              <Text style={tw`text-white font-bold text-xs`}>Download</Text>
+                            </TouchableOpacity>
+                          </View>
                         </View>
-                      </View>
+                      ) : null}
                     </View>
                   ) : (
                     <>

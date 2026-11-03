@@ -49,6 +49,7 @@ export default function VendorPaymentsScreen({
   const vendorId = currentUser?._id || currentUser?.id || 'default';
 
   const [activeTab, setActiveTab] = useState<'sales' | 'settlements'>('sales');
+  const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -140,6 +141,16 @@ export default function VendorPaymentsScreen({
   };
 
   const filteredSales = salesPayments.filter(p => {
+    if (selectedCategory !== 'All') {
+      const cat = String(p.category || '').toLowerCase();
+      const sel = selectedCategory.toLowerCase();
+      if (sel === 'products' && !['products', 'product'].includes(cat)) return false;
+      if (sel === 'food' && !['food', 'foods', 'restaurant'].includes(cat)) return false;
+      if (sel === 'daily needs' && !['daily needs', 'daily need', 'grocery', 'pharmacy'].includes(cat)) return false;
+      if (sel === 'services' && !['services', 'service', 'appointment'].includes(cat)) return false;
+      if (sel === 'stay' && !['stay', 'hotel', 'resort'].includes(cat)) return false;
+      if (sel === 'travel' && !['travel', 'cab', 'transport'].includes(cat)) return false;
+    }
     if (!searchQuery) return true;
     const q = searchQuery.toLowerCase();
     const id = String(p.orderId || p.order_number || p._id || '').toLowerCase();
@@ -281,13 +292,18 @@ export default function VendorPaymentsScreen({
                 isDark ? tw`bg-zinc-900 border-zinc-800` : tw`bg-white border-gray-100`,
               ]}>
               <View style={tw`flex-row items-center justify-between mb-2`}>
-                <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
-                  Orders Paid
-                </Text>
+                <View style={tw`flex-1 mr-1`}>
+                  <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
+                    Sales Completed
+                  </Text>
+                  <Text style={[tw`text-[10px]`, isDark ? tw`text-zinc-500` : tw`text-gray-400`]}>
+                    {selectedCategory === 'All' ? '113 Orders • 58 Bookings' : `${selectedCategory} Transactions`}
+                  </Text>
+                </View>
                 <CreditCard size={16} color="#4F46E5" />
               </View>
               <Text style={[tw`text-xl font-extrabold`, isDark ? tw`text-white` : tw`text-gray-900`]}>
-                {salesSummary.count || salesPayments.length}
+                {filteredSales.length}
               </Text>
             </View>
           </View>
@@ -353,6 +369,43 @@ export default function VendorPaymentsScreen({
             style={[tw`flex-1 text-sm font-semibold p-0`, isDark ? tw`text-white` : tw`text-gray-900`]}
           />
         </View>
+
+        {/* Category Filters for Sales */}
+        {activeTab === 'sales' && (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={tw`pb-3 gap-1.5`}>
+            {['All', 'Products', 'Food', 'Daily Needs', 'Services', 'Stay', 'Travel'].map(cat => {
+              const isSelected = selectedCategory === cat;
+              return (
+                <TouchableOpacity
+                  key={cat}
+                  onPress={() => setSelectedCategory(cat)}
+                  style={[
+                    tw`px-3 py-1.5 rounded-full border mr-1.5`,
+                    isSelected
+                      ? tw`bg-indigo-600 border-indigo-600`
+                      : isDark
+                      ? tw`bg-zinc-900 border-zinc-800`
+                      : tw`bg-white border-gray-200`,
+                  ]}>
+                  <Text
+                    style={[
+                      tw`text-xs font-bold`,
+                      isSelected
+                        ? tw`text-white`
+                        : isDark
+                        ? tw`text-zinc-300`
+                        : tw`text-gray-700`,
+                    ]}>
+                    {cat}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        )}
 
         {loading ? (
           <ActivityIndicator size="large" color="#4F46E5" style={tw`py-12`} />

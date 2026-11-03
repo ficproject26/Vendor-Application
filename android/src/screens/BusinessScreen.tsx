@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { launchCamera, launchImageLibrary } from 'react-native-image-picker';
-import { getVendorUser, setVendorUser, fetchProfile, fetchProducts, createProduct, updateProduct, deleteProduct, createBusiness, getActiveBusinessId, setActiveBusinessId, fetchAllBusinessesProducts, updateProfile, uploadImageToServer, normalizeCategory, fetchCategoryHierarchy, fetchMainCategories, applyListingOffer, removeListingOffer, formatImageUrl } from '../services/apiService';
+import { getVendorUser, setVendorUser, fetchProfile, fetchProducts, createProduct, updateProduct, deleteProduct, createBusiness, getActiveBusinessId, setActiveBusinessId, fetchAllBusinessesProducts, updateProfile, uploadImageToServer, normalizeCategory, fetchCategoryHierarchy, fetchMainCategories, applyListingOffer, removeListingOffer, formatImageUrl, isValidIndianPincode, isValidIndianMobile, sanitizeIndianPincode, sanitizeIndianMobile } from '../services/apiService';
 import { sessionManager } from '../services/sessionManager';
 import {
   View,
@@ -1068,11 +1068,25 @@ export default function BusinessScreen({
           return;
         }
 
-        const payload = {
+        if (bizPinCode && !isValidIndianPincode(bizPinCode)) {
+          Alert.alert('Invalid Pincode', 'Please enter a valid 6-digit Indian PIN code (cannot start with 0).');
+          setLoading(false);
+          return;
+        }
+        if (bizPhone && !isValidIndianMobile(bizPhone)) {
+          Alert.alert('Invalid Mobile Number', 'Please enter a valid 10-digit Indian mobile number starting with 6, 7, 8, or 9.');
+          setLoading(false);
+          return;
+        }
+
+        const payload: any = {
           businessName: businessNameInput || newItemCategory,
           vendorType: newItemCategory,
           category: newItemCategory,
           subcategory: newItemSubCategory || 'General',
+          address: bizAddress.trim(),
+          pinCode: bizPinCode.trim(),
+          phone: bizPhone.trim(),
         };
 
         let updatedUser = getVendorUser() || { businesses: [] };
@@ -1173,6 +1187,11 @@ export default function BusinessScreen({
           ? (jobDescription.trim() || newItemDetail.trim() || '')
           : (newItemDetail.trim() || '');
         const finalPinCode = isJob ? (jobPinCode.trim() || newItemPinCode.trim() || '') : (newItemPinCode.trim() || '');
+        if (finalPinCode && !isValidIndianPincode(finalPinCode)) {
+          Alert.alert('Invalid Pincode', 'Please enter a valid 6-digit Indian PIN code (cannot start with 0).');
+          setLoading(false);
+          return;
+        }
         const finalStock = isJob ? (jobVacancies.trim() || newItemStock.trim() || '0') : (newItemStock.trim() || '0');
         const finalOriginalPrice = newItemOriginalPrice.trim()
           ? (newItemOriginalPrice.startsWith('₹') ? newItemOriginalPrice : `₹${newItemOriginalPrice}`)
@@ -2296,7 +2315,7 @@ export default function BusinessScreen({
                     key={item.id}
                     activeOpacity={0.7}
                     style={[
-                      tw`rounded-2xl p-4 mb-3 flex-row items-center`,
+                      tw`rounded-2xl p-4 mb-3 flex-row items-start`,
                       isDark ? tw`bg-zinc-900 border border-zinc-800` : tw`bg-white`,
                       {
                         shadowColor: '#000',
@@ -2311,7 +2330,7 @@ export default function BusinessScreen({
                     {!(item.category === 'Jobs' || selectedCategory === 'Jobs') && (
                       <Image
                         source={{ uri: formatImageUrl(item.image) || categoryImages[item.category as CategoryKey] || categoryImages['Products'] }}
-                        style={[tw`w-22 h-22 rounded-2xl mr-4 border`, isDark ? tw`bg-zinc-800 border-zinc-700` : tw`bg-gray-100 border-gray-200`]}
+                        style={[tw`w-20 h-20 rounded-xl mr-3.5 border self-start`, isDark ? tw`bg-zinc-800 border-zinc-700` : tw`bg-gray-100 border-gray-200`]}
                         resizeMode="cover"
                       />
                     )}

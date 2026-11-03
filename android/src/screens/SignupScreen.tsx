@@ -64,7 +64,7 @@ const getCategoryEmoji = (cat: string) => {
   return '📦';
 };
 
-import { registerVendor, fetchMainCategories } from '../services/apiService';
+import { registerVendor, fetchMainCategories, isValidIndianPincode, isValidIndianMobile, sanitizeIndianPincode, sanitizeIndianMobile } from '../services/apiService';
 
 interface SignupScreenProps {
   onNavigateToLogin: () => void;
@@ -100,8 +100,8 @@ export default function SignupScreen({ onNavigateToLogin, onSignup, isDark = fal
       return;
     }
 
-    if (!postalCode) {
-      Alert.alert('Required Field', 'Please provide a valid postal code.');
+    if (!postalCode || !isValidIndianPincode(postalCode)) {
+      Alert.alert('Invalid Postal Code', 'Please enter a valid 6-digit Indian PIN code (cannot start with 0).');
       return;
     }
 
@@ -308,8 +308,12 @@ export default function SignupScreen({ onNavigateToLogin, onSignup, isDark = fal
         Alert.alert('Required Fields', 'Please fill in all fields marked with *');
         return;
       }
+      if (!postalCode || !isValidIndianPincode(postalCode)) {
+        Alert.alert('Invalid Postal Code', 'Please enter a valid 6-digit Indian PIN code (cannot start with 0).');
+        return;
+      }
       const cleanPhone = businessPhone.replace(/[^0-9]/g, '');
-      if (!/^[6-9]\d{9}$/.test(cleanPhone)) {
+      if (!isValidIndianMobile(cleanPhone)) {
         Alert.alert('Invalid Mobile Number', 'Please enter a valid 10-digit Indian mobile number starting with 6, 7, 8, or 9.');
         return;
       }

@@ -142,7 +142,9 @@ export default function NewActivityModal({
   const isStay = isStayBooking;
   const isTravel = isTravelBooking;
 
-  const txId = String(raw.order_number || raw.orderNumber || raw.applicationId || notification.id || raw.id || raw._id || 'TXN');
+  const realTxnId = raw.transactionId || raw.razorpayPaymentId || raw.paymentId || null;
+  const txId = String(isJob ? (raw.applicationId || raw.order_number || raw.id || raw._id || 'APP') : (raw.order_number || raw.orderNumber || notification.id || raw.id || raw._id || 'TXN'));
+  const jobId = isJob ? (raw.jobId || raw.productId || raw.job_id || null) : null;
   const customerName = raw.customer_name || raw.memberName || raw.customerName || raw.candidateName || notification.customerName || 'Customer';
   const customerPhone = raw.customer_phone || raw.customerPhone || raw.phone || raw.memberPhone || raw.candidatePhone || raw.mobileNumber || '';
   const customerEmail = raw.customer_email || raw.customerEmail || raw.email || raw.candidateEmail || '';
@@ -151,8 +153,10 @@ export default function NewActivityModal({
   const dateTimeStr = notification.dateTime || (raw.createdAt ? new Date(raw.createdAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : 'Just now');
   const rawStatus = raw.status || notification.status || 'Received';
   let statusStr = rawStatus;
-  if ((isFoodOrder || isDailyNeedsOrder || isOrder) && rawStatus === 'Booking Received') {
+  if ((isFoodOrder || isDailyNeedsOrder || isOrder) && (rawStatus === 'Booking Received' || rawStatus === 'Received')) {
     statusStr = 'Order Received';
+  } else if (isBooking && (rawStatus === 'Order Received' || rawStatus === 'Received')) {
+    statusStr = 'Booking Received';
   }
 
   // Helper to parse numeric price reliably without formatting corruption
@@ -416,6 +420,18 @@ export default function NewActivityModal({
                 </Text>
                 <Text style={[tw`text-xs font-extrabold font-mono`, isDark ? tw`text-white` : tw`text-gray-900`]}>#{txId.replace(/^#+/, '')}</Text>
               </View>
+              {isJob && jobId ? (
+                <View style={tw`flex-row justify-between items-center mb-1`}>
+                  <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>Job ID:</Text>
+                  <Text style={[tw`text-xs font-bold font-mono text-indigo-600`]}>#{String(jobId).replace(/^#+/, '')}</Text>
+                </View>
+              ) : null}
+              {realTxnId && !isJob ? (
+                <View style={tw`flex-row justify-between items-center mb-1`}>
+                  <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>Transaction ID:</Text>
+                  <Text style={[tw`text-xs font-mono`, isDark ? tw`text-zinc-300` : tw`text-gray-700`]}>{String(realTxnId).replace(/^#+/, '')}</Text>
+                </View>
+              ) : null}
               <View style={tw`flex-row justify-between items-center mb-1`}>
                 <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>Category:</Text>
                 <Text style={[tw`text-xs font-bold`, isDark ? tw`text-zinc-200` : tw`text-gray-800`]}>{raw.category || raw.type || notification.category}</Text>

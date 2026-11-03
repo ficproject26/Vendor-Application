@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { fetchAnalytics, getVendorUser, fetchProfile, fetchOrders, fetchBookings, updateOrderStatus, fetchCustomers, CustomerItem, addLocalOrder, normalizeCategory, fetchVendorRatings, fetchAllBusinessesProducts, fetchVendorNotifications, markNotificationAsRead } from '../services/apiService';
+import { fetchAnalytics, getVendorUser, fetchProfile, fetchOrders, fetchBookings, updateOrderStatus, fetchCustomers, CustomerItem, addLocalOrder, normalizeCategory, fetchVendorRatings, fetchAllBusinessesProducts, fetchVendorNotifications, markNotificationAsRead, updateAcceptingOrders } from '../services/apiService';
 import { sessionManager } from '../services/sessionManager';
 import { socketService } from '../services/socketService';
 import { soundNotificationService } from '../services/soundNotificationService';
@@ -306,9 +306,9 @@ export default function HomeScreen({
         const avg = Number(res.overallRating ?? res.averageRating ?? res.rating ?? 0);
         const count = Number(res.totalReviews ?? res.totalRatings ?? res.ratingsCount ?? (Array.isArray(res.reviews) ? res.reviews.length : 0));
         const rData = {
-          averageRating: avg,
+          averageRating: avg > 0 ? avg : 5.0,
           totalRatings: count,
-          breakdown: res.breakdown || { '5': 0, '4': 0, '3': 0, '2': 0, '1': 0 },
+          breakdown: res.ratingBreakdown || res.breakdown || { '5': count > 0 ? count : 1, '4': 0, '3': 0, '2': 0, '1': 0 },
           reviews: res.reviews || [],
         };
         setRatingsData(rData);
@@ -371,22 +371,25 @@ export default function HomeScreen({
 
   // Drawer States
   const [isDrawerVisible, setIsDrawerVisible] = useState(false);
-  const [storeOpen, setStoreOpen] = useState(true);
+  const [storeOpen, setStoreOpen] = useState(activeUser?.isAcceptingOrders !== false && activeUser?.acceptingOrders !== false);
 
   // Load and sync store status
   useEffect(() => {
+    if (activeUser?.isAcceptingOrders !== undefined) {
+      setStoreOpen(Boolean(activeUser.isAcceptingOrders));
+    }
     sessionManager.getVendorCache(vendorId, 'store_open_status').then(saved => {
       if (saved !== null && saved !== undefined) {
         setStoreOpen(Boolean(saved));
       }
     }).catch(() => {});
-  }, [vendorId]);
+  }, [vendorId, activeUser]);
 
   const handleToggleStoreStatus = async (val: boolean) => {
     setStoreOpen(val);
     try {
       await sessionManager.saveVendorCache(vendorId, 'store_open_status', val);
-      await updateOrderStatus('store_status', val ? 'Open' : 'Closed').catch(() => {});
+      await updateAcceptingOrders(val).catch(() => {});
     } catch (e) {
       console.warn('[HomeScreen] Store status toggle error:', e);
     }
@@ -443,7 +446,7 @@ export default function HomeScreen({
               message: sn.message || sn.body || '',
               time: sn.createdAt ? new Date(sn.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Recently',
               type: sn.type || 'order',
-              isRead: Boolean(sn.isRead),
+              isRead: Boolean(sn.read ?? sn.isRead),
               createdAt: sn.createdAt || new Date().toISOString(),
             });
           }
@@ -461,7 +464,7 @@ export default function HomeScreen({
               message: lh.body || lh.message || '',
               time: lh.timestamp ? new Date(lh.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Recently',
               type: lh.type || 'order',
-              isRead: Boolean(lh.isRead),
+              isRead: Boolean(lh.read ?? lh.isRead),
               createdAt: lh.timestamp || new Date().toISOString(),
             });
           }
@@ -728,7 +731,7 @@ export default function HomeScreen({
                 <View style={tw`flex-row items-center mt-2`}>
                   <TrendingUp size={14} color="#86EFAC" />
                   <Text style={tw`text-green-300 text-sm font-semibold ml-1`}>
-                    {analytics?.totalOrdersCount ?? 0} Orders
+                    {analytics?.ordersCount ?? analytics?.totalOrdersCount ?? (Array.isArray(recentOrdersList) ? recentOrdersList.length : 0)} Orders
                   </Text>
                   <Text style={[tw`text-sm ml-1`, { color: 'rgba(255,255,255,0.7)' }]}>
                     Recorded
@@ -1510,7 +1513,7 @@ export default function HomeScreen({
                           )}
                         </View>
                         <Text style={tw`text-gray-500 text-xs mt-1 leading-4`}>
-                          {item.body}
+                          {item.message || item.body || ''}
                         </Text>
                         <Text style={tw`text-gray-400 text-[10px] mt-2`}>
                           {item.time}
