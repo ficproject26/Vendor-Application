@@ -49,6 +49,7 @@ import {
   ChevronRight,
 } from 'lucide-react-native';
 import { BusinessItem, CategoryKey } from '../../../App';
+import AddBusinessModal from '../components/AddBusinessModal';
 
 const getCategoryUnitLabel = (cat: CategoryKey) => {
   switch (cat) {
@@ -373,10 +374,21 @@ export default function BusinessScreen({
     loadDynamicHierarchy(cat);
   }, [selectedCategory, activeCategory]);
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
+  const [isAddBusinessModalVisible, setIsAddBusinessModalVisible] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [editingItem, setEditingItem] = useState<BusinessItem | null>(null);
   const [modalType, setModalType] = useState<'business' | 'item'>('business');
+
+  const handleAddBusinessSuccess = async (resData: any) => {
+    if (resData?.user) {
+      setVendorUser(resData.user);
+    }
+    await fetchAllBusinessesProducts();
+    if ((routeParams as any)?.onBusinessAdded) {
+      (routeParams as any).onBusinessAdded();
+    }
+  };
 
   // States for new item form
   const [newItemName, setNewItemName] = useState('');
@@ -693,23 +705,8 @@ export default function BusinessScreen({
         }
         setIsAddModalVisible(true);
       } else if (routeParams.autoOpenModal === 'business') {
-        // Open add business modal
-        setModalType('business');
-        const targetCat = (routeParams.category || selectedCategory || 'Products') as CategoryKey;
-        setNewItemCategory(targetCat);
-        loadDynamicHierarchy(targetCat);
-        const catHierarchy = getHierarchyForCat(targetCat);
-        const subCategories = Object.keys(catHierarchy);
-        if (subCategories && subCategories.length > 0) {
-          const defaultSub = subCategories[0];
-          setNewItemSubCategory(defaultSub);
-          const types = catHierarchy[defaultSub] || [];
-          setNewItemItemType(types && types.length > 0 ? types[0] : '');
-        } else {
-          setNewItemSubCategory('');
-          setNewItemItemType('');
-        }
-        setIsAddModalVisible(true);
+        // Open 5-step add business modal
+        setIsAddBusinessModalVisible(true);
       }
       if (clearRouteParams) {
         clearRouteParams();
@@ -1337,29 +1334,7 @@ export default function BusinessScreen({
   };
 
   const openAddBusinessModal = () => {
-    setModalType('business');
-    setNewItemName('');
-    setBizAddress('');
-    setBizPinCode('');
-    setBizPhone('');
-    const registered = (currentUser?.businesses || []).map((b: any) => 
-      normalizeCategory(b?.vendorType || b?.category || b?.baseVendorType)
-    );
-    const availableCat = categoriesConfig.find(c => !registered.includes(c.key))?.key || selectedCategory || 'Products';
-    setNewItemCategory(availableCat);
-    loadDynamicHierarchy(availableCat);
-    const catHierarchy = getHierarchyForCat(availableCat);
-    const subCategories = Object.keys(catHierarchy);
-    if (subCategories && subCategories.length > 0) {
-      const defaultSub = subCategories[0];
-      setNewItemSubCategory(defaultSub);
-      const types = catHierarchy[defaultSub];
-      setNewItemItemType(types && types.length > 0 ? types[0] : '');
-    } else {
-      setNewItemSubCategory('');
-      setNewItemItemType('');
-    }
-    setIsAddModalVisible(true);
+    setIsAddBusinessModalVisible(true);
   };
 
   const openEditBusinessModal = (biz: any) => {
@@ -4631,6 +4606,15 @@ export default function BusinessScreen({
           </View>
         </View>
       )}
+
+      {/* 5-Step Add Business Modal (Exact Parity with Web AddBusinessModal) */}
+      <AddBusinessModal
+        isOpen={isAddBusinessModalVisible}
+        onClose={() => setIsAddBusinessModalVisible(false)}
+        user={currentUser}
+        onSuccess={handleAddBusinessSuccess}
+        isDark={isDark}
+      />
 
     </View>
   );

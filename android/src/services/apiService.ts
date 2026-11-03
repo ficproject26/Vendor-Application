@@ -1391,7 +1391,7 @@ export const updateProfile = async (payload: any) => {
 };
 
 // Business Creation & Deletion
-export const createBusiness = async (payload: { businessName: string; vendorType: string; category: string; subcategory: string }) => {
+export const createBusiness = async (payload: any) => {
   const data = await apiRequest('/vendor/business', {
     method: 'POST',
     body: JSON.stringify(payload),
@@ -1458,7 +1458,7 @@ export const fetchMainCategories = async (): Promise<string[]> => {
   } catch (err) {
     console.warn('[apiService] fetchMainCategories fallback:', err);
   }
-  return ['Products', 'Services', 'Food', 'Daily Needs', 'Stay', 'Travel', 'Jobs'];
+  return ['Products', 'Services', 'Food', 'Daily Needs', 'Stay', 'Travel', 'Jobs', 'Electronics'];
 };
 
 export const fetchCategoryHierarchy = async (mainCategory: string): Promise<Record<string, string[]>> => {
