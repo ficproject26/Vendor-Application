@@ -109,6 +109,20 @@ class OrderAlertModule(private val reactContext: ReactApplicationContext) :
 
                     notificationManager.createNotificationChannel(primaryChannel)
                     notificationManager.createNotificationChannel(updatesChannel)
+
+                    val fallbackChannel = NotificationChannel(
+                        "connect_orders_realtime_channel",
+                        "Vendor Realtime Alerts",
+                        NotificationManager.IMPORTANCE_HIGH
+                    ).apply {
+                        description = "Fallback channel for real-time order alerts"
+                        enableVibration(true)
+                        vibrationPattern = longArrayOf(0, 400, 200, 400)
+                        setSound(soundUri, audioAttributes)
+                        lockscreenVisibility = NotificationCompat.VISIBILITY_PUBLIC
+                        setShowBadge(true)
+                    }
+                    notificationManager.createNotificationChannel(fallbackChannel)
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }

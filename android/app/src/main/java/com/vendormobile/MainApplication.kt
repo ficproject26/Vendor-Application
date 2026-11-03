@@ -22,6 +22,8 @@ class MainApplication : Application(), ReactApplication {
 
   override fun onCreate() {
     super.onCreate()
+    // Proactively initialize all native notification channels upon application boot
+    OrderAlertModule.initNotificationChannels(this)
     loadReactNative(this)
   }
 }

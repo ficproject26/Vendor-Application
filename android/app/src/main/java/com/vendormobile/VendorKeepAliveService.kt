@@ -310,10 +310,19 @@ class VendorKeepAliveService : Service() {
                 val rootObj = JSONObject(sb.toString())
                 val dataArray: JSONArray = rootObj.optJSONArray("data") ?: JSONArray()
 
-                // On first poll for this endpoint, seed all existing IDs to strictly suppress historical notifications
+                // On first poll for this endpoint, seed historical items older than 3 minutes to suppress old notifications
                 if (!seededEndpoints.contains(endpointPath)) {
+                    val historicalThreshold = serviceStartTime - 180_000L
                     for (i in 0 until dataArray.length()) {
                         val item = dataArray.optJSONObject(i) ?: continue
+                        val createdAtStr = item.optString("createdAt").ifBlank {
+                            item.optString("created_at").ifBlank {
+                                item.optString("date").ifBlank {
+                                    item.optString("order_date")
+                                }
+                            }
+                        }
+                        val itemTimestamp = parseTimestamp(createdAtStr)
                         val oid = item.optString("order_number").ifBlank {
                             item.optString("id").ifBlank {
                                 item.optString("_id").ifBlank {
@@ -321,13 +330,12 @@ class VendorKeepAliveService : Service() {
                                 }
                             }
                         }
-                        if (oid.isNotBlank()) {
+                        if (oid.isNotBlank() && (itemTimestamp == 0L || itemTimestamp < historicalThreshold)) {
                             knownOrderIds.add(oid.trim())
                         }
                     }
                     seededEndpoints.add(endpointPath)
                     persistHandledOrders(this@VendorKeepAliveService)
-                    return
                 }
 
                 // Check for new, unseen incoming items

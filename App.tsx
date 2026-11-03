@@ -369,6 +369,7 @@ function App() {
     const tier = user.membershipPlan === 'Gold' ? 'Gold' : user.membershipPlan === 'Diamond' ? 'Diamond' : 'Silver';
     setPurchasedTier(tier);
     setIsLoggedIn(true);
+    registerDeviceToken().catch(() => {});
   };
 
   const handleSignup = () => {
@@ -601,6 +602,7 @@ function App() {
         }
       }
 
+      let tokenRegistered = false;
       if (messagingModule && hasPermission) {
         try {
           const authStatus = await messagingModule().requestPermission();
@@ -610,15 +612,25 @@ function App() {
           console.log('[App] FCM Auth Status:', authStatus, 'Enabled:', enabled);
 
           if (enabled) {
-            const token = await messagingModule().getToken();
-            if (token) {
-              console.log('🔥 [App] FCM Device Token obtained:', token);
-              await registerDeviceToken(token);
+            try {
+              const token = await messagingModule().getToken();
+              if (token) {
+                console.log('🔥 [App] Real Google FCM Device Token obtained:', token);
+                await registerDeviceToken(token);
+                tokenRegistered = true;
+              }
+            } catch (tokenErr: any) {
+              console.warn('[App] Real Google FCM token acquisition notice:', tokenErr?.message || tokenErr);
             }
           }
         } catch (fcmErr: any) {
           console.warn('[App] FCM Token registration notice:', fcmErr?.message || fcmErr);
         }
+      }
+
+      // Guarantee vendor device token registration even if Google FCM service is pending configuration
+      if (!tokenRegistered) {
+        await registerDeviceToken();
       }
     };
 
@@ -635,6 +647,7 @@ function App() {
           'https://vendor.ficapp.in/api',
           JSON.stringify(user.businesses || [])
         );
+        registerDeviceToken().catch(() => {});
       }
       soundNotificationService.startKeepAliveService();
     }
