@@ -6,6 +6,8 @@ import {
   View,
   Text,
   ScrollView,
+  FlatList,
+  Platform,
   TouchableOpacity,
   StatusBar,
   Image,
@@ -472,10 +474,19 @@ export default function OrdersScreen({
   const [searchQuery, setSearchQuery] = useState('');
   const [filterModalVisible, setFilterModalVisible] = useState(false);
 
-  // Independent state per section (prevents cross-tab overwrites or blank screens)
-  const [ordersRaw, setOrdersRaw] = useState<any[]>([]);
-  const [bookingsRaw, setBookingsRaw] = useState<any[]>([]);
-  const [jobsRaw, setJobsRaw] = useState<any[]>([]);
+  // Independent state per section initialized synchronously from fast memory cache (< 1ms)
+  const [ordersRaw, setOrdersRaw] = useState<any[]>(() => {
+    const cached = sessionManager.getVendorCacheSync(vendorId, 'orders_raw');
+    return Array.isArray(cached) ? cached : [];
+  });
+  const [bookingsRaw, setBookingsRaw] = useState<any[]>(() => {
+    const cached = sessionManager.getVendorCacheSync(vendorId, 'bookings_raw');
+    return Array.isArray(cached) ? cached : [];
+  });
+  const [jobsRaw, setJobsRaw] = useState<any[]>(() => {
+    const cached = sessionManager.getVendorCacheSync(vendorId, 'jobs_raw');
+    return Array.isArray(cached) ? cached : [];
+  });
   const [productImageMap, setProductImageMap] = useState<Record<string, string>>({});
   const [loadingOrders, setLoadingOrders] = useState(false);
   const [loadingBookings, setLoadingBookings] = useState(false);
@@ -567,7 +578,7 @@ export default function OrdersScreen({
         }).catch(() => {});
         return;
       }
-      setLoadingOrders(true);
+      if (ordersRaw.length === 0) setLoadingOrders(true);
       try {
         const data = await fetchOrders();
         const list = Array.isArray(data) ? data : [];
@@ -589,7 +600,7 @@ export default function OrdersScreen({
         }).catch(() => {});
         return;
       }
-      setLoadingBookings(true);
+      if (bookingsRaw.length === 0) setLoadingBookings(true);
       try {
         const data = await fetchBookings();
         const list = Array.isArray(data) ? data : [];
@@ -611,7 +622,7 @@ export default function OrdersScreen({
         }).catch(() => {});
         return;
       }
-      setLoadingJobs(true);
+      if (jobsRaw.length === 0) setLoadingJobs(true);
       try {
         const data = await fetchApplications();
         const list = Array.isArray(data) ? data : [];
@@ -1519,6 +1530,708 @@ export default function OrdersScreen({
     }
   }, [routeParams?.targetId, ordersData, bookingsData, jobsData, activeSegment]);
 
+  
+  const renderOrderItemCard = (order: Order) => {
+    const config = statusConfig[order.status] || {
+      color: '#4B5563',
+      bgColor: '#F3F4F6',
+    };
+    const isPaid = String(order.paymentStatus || '').toLowerCase() === 'paid' || String(order.paymentStatus || '').toLowerCase() === 'completed';
+    const isFailed = String(order.paymentStatus || '').toLowerCase() === 'failed';
+    const pMethod = (order.paymentMethod || order.rawOrder?.paymentMethod || order.rawOrder?.payment_method || '').toLowerCase();
+    const isCod = pMethod.includes('cod') || pMethod.includes('cash');
+
+    return (
+      <TouchableOpacity
+        key={order.id}
+        activeOpacity={0.7}
+        onPress={() => setSelectedOrder(order)}
+        style={[
+          tw`rounded-2xl p-4 mb-3 border`,
+          isDark ? tw`bg-zinc-900 border-zinc-800` : tw`bg-white border-gray-100`,
+          {
+            shadowColor: '#000',
+            shadowOffset: {width: 0, height: 2},
+            shadowOpacity: 0.05,
+            shadowRadius: 8,
+            elevation: 2,
+          },
+        ]}>
+        {/* Tier 1 Header: Category Badge + Order ID (Left), Order Delivery Status Badge (Right) */}
+        <View style={tw`flex-row items-center justify-between mb-2`}>
+          <View style={tw`flex-row items-center flex-1 mr-2`}>
+            <View style={[tw`flex-row items-center px-2.5 py-1 rounded-full mr-2`, isDark ? tw`bg-indigo-950/60` : tw`bg-indigo-50`]}>
+              <Package size={12} color="#4F46E5" style={tw`mr-1`} />
+              <Text style={tw`text-[10px] font-black text-indigo-700 dark:text-indigo-400 tracking-wider`}>
+                {order.category ? `${String(order.category).toUpperCase()} ORDER` : 'ORDER'}
+              </Text>
+            </View>
+            <Text style={[tw`font-extrabold text-sm font-mono`, isDark ? tw`text-white` : tw`text-gray-900`]} numberOfLines={1}>
+              #{order.id}
+            </Text>
+          </View>
+          <View
+            style={[
+              tw`px-2.5 py-1 rounded-full`,
+              {backgroundColor: config.bgColor},
+            ]}>
+            <Text
+              style={[
+                tw`text-[11px] font-bold`,
+                {color: config.color},
+              ]}>
+              {order.status}
+            </Text>
+          </View>
+        </View>
+
+        {/* Tier 2 Header: Dedicated Payment Status Badge + Payment Method + Date/Time */}
+        <View style={[tw`flex-row items-center justify-between pb-2 mb-2.5 border-b`, isDark ? tw`border-zinc-800` : tw`border-gray-100`]}>
+          <View style={tw`flex-row items-center gap-1.5`}>
+            <View
+              style={[
+                tw`px-2 py-0.5 rounded-md border`,
+                isPaid
+                  ? (isDark ? tw`bg-emerald-950/60 border-emerald-800` : tw`bg-emerald-50 border-emerald-200`)
+                  : isCod
+                  ? (isDark ? tw`bg-amber-950/60 border-amber-800` : tw`bg-amber-50 border-amber-200`)
+                  : isFailed
+                  ? (isDark ? tw`bg-rose-950/60 border-rose-800` : tw`bg-rose-50 border-rose-200`)
+                  : (isDark ? tw`bg-amber-950/60 border-amber-800` : tw`bg-amber-50 border-amber-200`),
+              ]}>
+              <Text
+                style={[
+                  tw`text-[10px] font-black uppercase tracking-wider`,
+                  isPaid
+                    ? tw`text-emerald-600`
+                    : isCod
+                    ? tw`text-amber-600`
+                    : isFailed
+                    ? tw`text-rose-600`
+                    : tw`text-amber-600`,
+                ]}>
+                {isPaid ? '✓ Paid' : isCod ? 'COD Pending' : isFailed ? '✕ Payment Failed' : (order.paymentStatus || 'Payment Pending')}
+              </Text>
+            </View>
+            {pMethod ? (
+              <View style={[tw`px-1.5 py-0.5 rounded`, isDark ? tw`bg-zinc-800` : tw`bg-gray-100`]}>
+                <Text style={[tw`text-[9px] font-bold uppercase`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>
+                  {pMethod.toUpperCase()}
+                </Text>
+              </View>
+            ) : null}
+          </View>
+          <Text style={[tw`text-[11px] font-medium`, isDark ? tw`text-zinc-400` : tw`text-gray-400`]}>
+            {order.dateTime || ''}
+          </Text>
+        </View>
+
+        {/* Body: Product Image + Product Details + Quantity */}
+        <View style={tw`flex-row items-start mb-3`}>
+          {order.image ? (
+            <Image
+              source={{ uri: formatImageUrl(order.image) }}
+              style={tw`w-16 h-16 rounded-xl mr-3 bg-gray-100`}
+            />
+          ) : (
+            <View style={[tw`w-16 h-16 rounded-xl mr-3 items-center justify-center`, isDark ? tw`bg-zinc-800` : tw`bg-gray-100`]}>
+              <Package size={24} color="#6B7280" />
+            </View>
+          )}
+
+          <View style={tw`flex-1`}>
+            <Text style={[tw`font-bold text-sm`, isDark ? tw`text-zinc-100` : tw`text-gray-900`]} numberOfLines={2}>
+              {order.name}
+            </Text>
+            <View style={tw`flex-row items-center mt-1 flex-wrap gap-1.5`}>
+              <View style={[tw`px-2 py-0.5 rounded-md`, isDark ? tw`bg-zinc-800` : tw`bg-gray-100`]}>
+                <Text style={[tw`text-[11px] font-semibold`, isDark ? tw`text-zinc-300` : tw`text-gray-600`]}>
+                  Qty: {order.quantity || 1}
+                </Text>
+              </View>
+              <View style={[tw`px-2 py-0.5 rounded-md`, isDark ? tw`bg-zinc-800` : tw`bg-gray-100`]}>
+                <Text style={[tw`text-[11px] font-semibold text-indigo-600`]}>
+                  {order.category || 'Product'}
+                </Text>
+              </View>
+            </View>
+          </View>
+        </View>
+
+        {/* Customer Info Strip */}
+        <View style={[tw`p-2.5 rounded-xl mb-3 flex-row items-center justify-between`, isDark ? tw`bg-zinc-800/70` : tw`bg-gray-50`]}>
+          <View style={tw`flex-row items-center flex-1 mr-2`}>
+            <Users size={14} color="#6B7280" style={tw`mr-1.5`} />
+            <Text style={[tw`text-xs font-bold`, isDark ? tw`text-zinc-200` : tw`text-gray-800`]} numberOfLines={1}>
+              {order.customerName}
+            </Text>
+          </View>
+          {order.customerPhone ? (
+            <View style={tw`flex-row items-center`}>
+              <Phone size={12} color="#6B7280" style={tw`mr-1`} />
+              <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>
+                {order.customerPhone}
+              </Text>
+            </View>
+          ) : null}
+        </View>
+
+        {/* Footer Row: Date & Time + Amount + Arrow */}
+        <View style={[tw`flex-row items-center justify-between pt-2.5 border-t`, isDark ? tw`border-zinc-800` : tw`border-gray-100`]}>
+          <View style={tw`flex-row items-center`}>
+            <Clock size={13} color="#9CA3AF" style={tw`mr-1.5`} />
+            <Text style={[tw`text-xs font-medium`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]} numberOfLines={1}>
+              {order.dateTime}
+            </Text>
+          </View>
+
+          <View style={tw`flex-row items-center`}>
+            <Text style={[tw`text-base font-extrabold mr-2`, isDark ? tw`text-white` : tw`text-gray-900`]}>
+              {order.amount}
+            </Text>
+            <ChevronRight size={16} color="#9CA3AF" />
+          </View>
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
+  const renderBookingItemCard = (booking: Booking) => {
+    if (booking.isBusBooking) {
+      return renderBusBookingCard(booking);
+    }
+    const config = (bookingStatusConfig as any)[booking.status] || {
+      color: '#4B5563',
+      bgColor: '#F3F4F6',
+      icon: Clock,
+    };
+    const isPaid = String(booking.paymentStatus || '').toLowerCase() === 'paid' || String(booking.paymentStatus || '').toLowerCase() === 'completed';
+    const isFailed = String(booking.paymentStatus || '').toLowerCase() === 'failed';
+    const pMethod = (booking.paymentMethod || booking.rawOrder?.paymentMethod || booking.rawOrder?.payment_method || '').toLowerCase();
+    const isCod = pMethod.includes('cod') || pMethod.includes('cash') || pMethod.includes('hotel') || pMethod.includes('pay at hotel');
+
+    if (booking.bookingCategory === 'Stay') {
+      return (
+        <TouchableOpacity
+          key={booking.id}
+          activeOpacity={0.7}
+          onPress={() => setSelectedBooking(booking)}
+          style={[
+            tw`rounded-2xl p-4 mb-3 border`,
+            isDark ? tw`bg-zinc-900 border-zinc-800` : tw`bg-white border-amber-100`,
+            {
+              shadowColor: '#F59E0B',
+              shadowOffset: {width: 0, height: 2},
+              shadowOpacity: 0.05,
+              shadowRadius: 8,
+              elevation: 2,
+            },
+          ]}>
+          {/* Tier 1 Header: Stay Tag + Booking ID (Left), Status Badge (Right) */}
+          <View style={tw`flex-row items-center justify-between mb-2`}>
+            <View style={tw`flex-row items-center flex-1 mr-2`}>
+              <View style={[tw`flex-row items-center px-2.5 py-1 rounded-full mr-2`, isDark ? tw`bg-amber-950/60` : tw`bg-amber-50`]}>
+                <CalendarCheck size={12} color="#D97706" style={tw`mr-1`} />
+                <Text style={tw`text-[10px] font-black text-amber-700 dark:text-amber-400 tracking-wider`}>{booking.bookingBadgeLabel || 'STAY BOOKING'}</Text>
+              </View>
+              <Text style={[tw`font-extrabold text-sm font-mono`, isDark ? tw`text-white` : tw`text-gray-900`]} numberOfLines={1}>
+                #{booking.id}
+              </Text>
+            </View>
+            <View style={[tw`px-2.5 py-1 rounded-full`, {backgroundColor: config.bgColor}]}>
+              <Text style={[tw`text-[11px] font-bold`, {color: config.color}]}>
+                {booking.status}
+              </Text>
+            </View>
+          </View>
+
+          {/* Tier 2 Header: Dedicated Payment Status Badge + Payment Method + Date/Time */}
+          <View style={[tw`flex-row items-center justify-between pb-2 mb-2.5 border-b`, isDark ? tw`border-zinc-800` : tw`border-gray-100`]}>
+            <View style={tw`flex-row items-center gap-1.5`}>
+              <View
+                style={[
+                  tw`px-2 py-0.5 rounded-md border`,
+                  isPaid
+                    ? (isDark ? tw`bg-emerald-950/60 border-emerald-800` : tw`bg-emerald-50 border-emerald-200`)
+                    : isCod
+                    ? (isDark ? tw`bg-amber-950/60 border-amber-800` : tw`bg-amber-50 border-amber-200`)
+                    : isFailed
+                    ? (isDark ? tw`bg-rose-950/60 border-rose-800` : tw`bg-rose-50 border-rose-200`)
+                    : (isDark ? tw`bg-amber-950/60 border-amber-800` : tw`bg-amber-50 border-amber-200`),
+                ]}>
+                <Text style={[tw`text-[10px] font-black uppercase tracking-wider`, isPaid ? tw`text-emerald-600` : isCod ? tw`text-amber-600` : isFailed ? tw`text-rose-600` : tw`text-amber-600`]}>
+                  {isPaid ? '✓ Paid' : isCod ? 'Pay at Hotel' : isFailed ? '✕ Payment Failed' : (booking.paymentStatus || 'Payment Pending')}
+                </Text>
+              </View>
+              {pMethod ? (
+                <View style={[tw`px-1.5 py-0.5 rounded`, isDark ? tw`bg-zinc-800` : tw`bg-gray-100`]}>
+                  <Text style={[tw`text-[9px] font-bold uppercase`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>
+                    {pMethod.toUpperCase()}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+            <Text style={[tw`text-[11px] font-medium`, isDark ? tw`text-zinc-400` : tw`text-gray-400`]}>
+              Check-in: {booking.checkInDate || ''}
+            </Text>
+          </View>
+
+          {/* Property Name & Accommodation */}
+          <View style={tw`mb-2.5`}>
+            <Text style={[tw`text-base font-extrabold`, isDark ? tw`text-white` : tw`text-gray-900`]}>
+              {booking.propertyName || 'Hotel Stay'}
+            </Text>
+            <Text style={[tw`text-xs mt-0.5`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
+              Booking ID: <Text style={tw`font-mono font-bold text-amber-600 dark:text-amber-400`}>#{booking.id}</Text>
+              {booking.roomName ? ` • ${booking.roomName}` : ''}
+            </Text>
+          </View>
+
+          {/* Schedule Strip: Check-in and Check-out Displayed Separately */}
+          <View style={[tw`p-2.5 rounded-xl mb-2.5 flex-row items-center justify-between`, isDark ? tw`bg-zinc-800/80` : tw`bg-amber-50/50`]}>
+            <View style={tw`flex-1 mr-2`}>
+              <Text style={tw`text-[10px] uppercase font-bold text-emerald-600 dark:text-emerald-400`}>Check-In</Text>
+              <Text style={[tw`text-xs font-extrabold mt-0.5`, isDark ? tw`text-zinc-100` : tw`text-gray-900`]}>
+                {booking.checkInDate}
+              </Text>
+              <Text style={[tw`text-[10px]`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
+                {booking.checkInTime}
+              </Text>
+            </View>
+            <View style={tw`h-8 w-[1px] bg-gray-200 dark:bg-zinc-700 mr-2`} />
+            <View style={tw`flex-1`}>
+              <Text style={tw`text-[10px] uppercase font-bold text-amber-600 dark:text-amber-400`}>Check-Out</Text>
+              <Text style={[tw`text-xs font-extrabold mt-0.5`, isDark ? tw`text-zinc-100` : tw`text-gray-900`]}>
+                {booking.checkOutDate}
+              </Text>
+              <Text style={[tw`text-[10px]`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
+                {booking.checkOutTime}
+              </Text>
+            </View>
+          </View>
+
+          {/* Guest & Customer Info */}
+          <View style={[tw`p-2.5 rounded-xl mb-2.5 flex-row items-center justify-between`, isDark ? tw`bg-zinc-800/60` : tw`bg-gray-50`]}>
+            <View style={tw`flex-row items-center flex-1 mr-2`}>
+              <Users size={14} color="#6B7280" style={tw`mr-1.5`} />
+              <Text style={[tw`text-xs font-bold`, isDark ? tw`text-zinc-200` : tw`text-gray-800`]} numberOfLines={1}>
+                {booking.customer} ({booking.guestCount || 1} Guests)
+              </Text>
+            </View>
+            {booking.phone ? (
+              <View style={tw`flex-row items-center`}>
+                <Phone size={12} color="#6B7280" style={tw`mr-1`} />
+                <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>
+                  {booking.phone}
+                </Text>
+              </View>
+            ) : null}
+          </View>
+
+          {/* Footer Row */}
+          <View style={[tw`flex-row items-center justify-between pt-2.5 border-t`, isDark ? tw`border-zinc-800` : tw`border-gray-100`]}>
+            <Text style={[tw`text-base font-extrabold text-amber-600 dark:text-amber-400`]}>
+              {booking.amount}
+            </Text>
+            <ChevronRight size={16} color="#9CA3AF" />
+          </View>
+        </TouchableOpacity>
+      );
+    }
+
+    if (booking.bookingCategory === 'Travel') {
+      return (
+        <TouchableOpacity
+          key={booking.id}
+          activeOpacity={0.7}
+          onPress={() => setSelectedBooking(booking)}
+          style={[
+            tw`rounded-2xl p-4 mb-3 border`,
+            isDark ? tw`bg-zinc-900 border-zinc-800` : tw`bg-white border-blue-100`,
+            {
+              shadowColor: '#2563EB',
+              shadowOffset: {width: 0, height: 2},
+              shadowOpacity: 0.05,
+              shadowRadius: 8,
+              elevation: 2,
+            },
+          ]}>
+          {/* Tier 1 Header: Travel Tag + Booking ID (Left), Status Badge (Right) */}
+          <View style={tw`flex-row items-center justify-between mb-2`}>
+            <View style={tw`flex-row items-center flex-1 mr-2`}>
+              <View style={[tw`flex-row items-center px-2.5 py-1 rounded-full mr-2`, isDark ? tw`bg-blue-950/60` : tw`bg-blue-50`]}>
+                <Compass size={12} color="#2563EB" style={tw`mr-1`} />
+                <Text style={tw`text-[10px] font-black text-blue-700 dark:text-blue-400 tracking-wider`}>{booking.bookingBadgeLabel || 'TRAVEL BOOKING'}</Text>
+              </View>
+              <Text style={[tw`font-extrabold text-sm font-mono`, isDark ? tw`text-white` : tw`text-gray-900`]} numberOfLines={1}>
+                #{booking.id}
+              </Text>
+            </View>
+            <View style={[tw`px-2.5 py-1 rounded-full`, {backgroundColor: config.bgColor}]}>
+              <Text style={[tw`text-[11px] font-bold`, {color: config.color}]}>
+                {booking.status}
+              </Text>
+            </View>
+          </View>
+
+          {/* Tier 2 Header: Dedicated Payment Status Badge + Payment Method + Date/Time */}
+          <View style={[tw`flex-row items-center justify-between pb-2 mb-2.5 border-b`, isDark ? tw`border-zinc-800` : tw`border-gray-100`]}>
+            <View style={tw`flex-row items-center gap-1.5`}>
+              <View
+                style={[
+                  tw`px-2 py-0.5 rounded-md border`,
+                  isPaid
+                    ? (isDark ? tw`bg-emerald-950/60 border-emerald-800` : tw`bg-emerald-50 border-emerald-200`)
+                    : isCod
+                    ? (isDark ? tw`bg-amber-950/60 border-amber-800` : tw`bg-amber-50 border-amber-200`)
+                    : isFailed
+                    ? (isDark ? tw`bg-rose-950/60 border-rose-800` : tw`bg-rose-50 border-rose-200`)
+                    : (isDark ? tw`bg-amber-950/60 border-amber-800` : tw`bg-amber-50 border-amber-200`),
+                ]}>
+                <Text style={[tw`text-[10px] font-black uppercase tracking-wider`, isPaid ? tw`text-emerald-600` : isCod ? tw`text-amber-600` : isFailed ? tw`text-rose-600` : tw`text-amber-600`]}>
+                  {isPaid ? '✓ Paid' : isCod ? 'COD Pending' : isFailed ? '✕ Payment Failed' : (booking.paymentStatus || 'Payment Pending')}
+                </Text>
+              </View>
+              {pMethod ? (
+                <View style={[tw`px-1.5 py-0.5 rounded`, isDark ? tw`bg-zinc-800` : tw`bg-gray-100`]}>
+                  <Text style={[tw`text-[9px] font-bold uppercase`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>
+                    {pMethod.toUpperCase()}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+            <Text style={[tw`text-[11px] font-medium`, isDark ? tw`text-zinc-400` : tw`text-gray-400`]}>
+              {booking.travelDate || ''}
+            </Text>
+          </View>
+
+          {/* Travel Option Name & Booking ID */}
+          <View style={tw`mb-2.5`}>
+            <Text style={[tw`text-base font-extrabold`, isDark ? tw`text-white` : tw`text-gray-900`]}>
+              {booking.serviceName || (booking as any).name || 'Travel Trip'}
+            </Text>
+            <Text style={[tw`text-xs mt-0.5`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
+              Booking ID: <Text style={tw`font-mono font-bold text-blue-600 dark:text-blue-400`}>#{booking.id}</Text>
+            </Text>
+          </View>
+
+          {/* Schedule Strip: Route or Date Display */}
+          <View style={[tw`p-2.5 rounded-xl mb-2.5 flex-row items-center justify-between`, isDark ? tw`bg-zinc-800/80` : tw`bg-blue-50/50`]}>
+            <View style={tw`flex-row items-center flex-1 mr-2`}>
+              <Calendar size={14} color="#2563EB" style={tw`mr-1.5`} />
+              <Text style={[tw`text-xs font-extrabold`, isDark ? tw`text-zinc-100` : tw`text-gray-900`]}>
+                Date: {booking.travelDate || booking.dateTime}
+              </Text>
+            </View>
+          </View>
+
+          {/* Customer Info Strip */}
+          <View style={[tw`p-2.5 rounded-xl mb-2.5 flex-row items-center justify-between`, isDark ? tw`bg-zinc-800/60` : tw`bg-gray-50`]}>
+            <View style={tw`flex-row items-center flex-1 mr-2`}>
+              <Users size={14} color="#6B7280" style={tw`mr-1.5`} />
+              <Text style={[tw`text-xs font-bold`, isDark ? tw`text-zinc-200` : tw`text-gray-800`]} numberOfLines={1}>
+                {booking.customer}
+              </Text>
+            </View>
+            {booking.phone ? (
+              <View style={tw`flex-row items-center`}>
+                <Phone size={12} color="#6B7280" style={tw`mr-1`} />
+                <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>
+                  {booking.phone}
+                </Text>
+              </View>
+            ) : null}
+          </View>
+
+          {/* Footer Row */}
+          <View style={[tw`flex-row items-center justify-between pt-2.5 border-t`, isDark ? tw`border-zinc-800` : tw`border-gray-100`]}>
+            <Text style={[tw`text-base font-extrabold text-blue-600 dark:text-blue-400`]}>
+              {booking.amount}
+            </Text>
+            <ChevronRight size={16} color="#9CA3AF" />
+          </View>
+        </TouchableOpacity>
+      );
+    }
+
+    // Default: Services / General Booking
+    return (
+      <TouchableOpacity
+        key={booking.id}
+        activeOpacity={0.7}
+        onPress={() => setSelectedBooking(booking)}
+        style={[
+          tw`rounded-2xl p-4 mb-3 border`,
+          isDark ? tw`bg-zinc-900 border-zinc-800` : tw`bg-white border-teal-100`,
+          {
+            shadowColor: '#0D9488',
+            shadowOffset: {width: 0, height: 2},
+            shadowOpacity: 0.05,
+            shadowRadius: 8,
+            elevation: 2,
+          },
+        ]}>
+        {/* Tier 1 Header: Service Tag + Booking ID (Left), Status Badge (Right) */}
+        <View style={tw`flex-row items-center justify-between mb-2`}>
+          <View style={tw`flex-row items-center flex-1 mr-2`}>
+            <View style={[
+              tw`flex-row items-center px-2.5 py-1 rounded-full mr-2`,
+              booking.bookingCategory === 'Unknown'
+                ? (isDark ? tw`bg-zinc-800` : tw`bg-gray-100`)
+                : (isDark ? tw`bg-teal-950/60` : tw`bg-teal-50`)
+            ]}>
+              <CalendarCheck size={12} color={booking.bookingCategory === 'Unknown' ? (isDark ? '#A1A1AA' : '#6B7280') : '#0D9488'} style={tw`mr-1`} />
+              <Text style={[
+                tw`text-[10px] font-black tracking-wider`,
+                booking.bookingCategory === 'Unknown'
+                  ? (isDark ? tw`text-zinc-400` : tw`text-gray-600`)
+                  : tw`text-teal-700 dark:text-teal-400`
+              ]}>
+                {booking.bookingBadgeLabel || 'SERVICE BOOKING'}
+              </Text>
+            </View>
+            <Text style={[tw`font-extrabold text-sm font-mono`, isDark ? tw`text-white` : tw`text-gray-900`]} numberOfLines={1}>
+              #{booking.id}
+            </Text>
+          </View>
+          <View style={[tw`px-2.5 py-1 rounded-full`, {backgroundColor: config.bgColor}]}>
+            <Text style={[tw`text-[11px] font-bold`, {color: config.color}]}>
+              {booking.status}
+            </Text>
+          </View>
+        </View>
+
+        {/* Tier 2 Header: Dedicated Payment Status Badge + Payment Method + Date/Time */}
+        <View style={[tw`flex-row items-center justify-between pb-2 mb-2.5 border-b`, isDark ? tw`border-zinc-800` : tw`border-gray-100`]}>
+          <View style={tw`flex-row items-center gap-1.5`}>
+            <View
+              style={[
+                tw`px-2 py-0.5 rounded-md border`,
+                isPaid
+                  ? (isDark ? tw`bg-emerald-950/60 border-emerald-800` : tw`bg-emerald-50 border-emerald-200`)
+                  : isCod
+                  ? (isDark ? tw`bg-amber-950/60 border-amber-800` : tw`bg-amber-50 border-amber-200`)
+                  : isFailed
+                  ? (isDark ? tw`bg-rose-950/60 border-rose-800` : tw`bg-rose-50 border-rose-200`)
+                  : (isDark ? tw`bg-amber-950/60 border-amber-800` : tw`bg-amber-50 border-amber-200`),
+              ]}>
+              <Text style={[tw`text-[10px] font-black uppercase tracking-wider`, isPaid ? tw`text-emerald-600` : isCod ? tw`text-amber-600` : isFailed ? tw`text-rose-600` : tw`text-amber-600`]}>
+                {isPaid ? '✓ Paid' : isCod ? 'COD Pending' : isFailed ? '✕ Payment Failed' : (booking.paymentStatus || 'Payment Pending')}
+              </Text>
+            </View>
+            {pMethod ? (
+              <View style={[tw`px-1.5 py-0.5 rounded`, isDark ? tw`bg-zinc-800` : tw`bg-gray-100`]}>
+                <Text style={[tw`text-[9px] font-bold uppercase`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>
+                  {pMethod.toUpperCase()}
+                </Text>
+              </View>
+            ) : null}
+          </View>
+          <Text style={[tw`text-[11px] font-medium`, isDark ? tw`text-zinc-400` : tw`text-gray-400`]}>
+            {booking.serviceDate || booking.serviceTime || ''}
+          </Text>
+        </View>
+
+        {/* Service Name & Booking ID */}
+        <View style={tw`mb-2.5`}>
+          <Text style={[tw`text-base font-extrabold`, isDark ? tw`text-white` : tw`text-gray-900`]} numberOfLines={1}>
+            {booking.serviceName}
+          </Text>
+          {booking.packageName ? (
+            <View style={[tw`mt-1 self-start px-2 py-0.5 rounded-md`, isDark ? tw`bg-teal-950/70` : tw`bg-teal-50`]}>
+              <Text style={tw`text-[10px] font-bold text-teal-700 dark:text-teal-400`}>
+                📦 {booking.packageName}
+              </Text>
+            </View>
+          ) : null}
+          <Text style={[tw`text-xs mt-1`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
+            Booking ID: <Text style={tw`font-mono font-bold text-teal-600 dark:text-teal-400`}>#{booking.id}</Text>
+          </Text>
+        </View>
+
+        {/* Schedule Box: Service Date and Time clearly visible */}
+        <View style={[tw`p-2.5 rounded-xl mb-2.5 flex-row items-center justify-between`, isDark ? tw`bg-zinc-800/80` : tw`bg-teal-50/50`]}>
+          <View style={tw`flex-row items-center flex-1 mr-2`}>
+            <Calendar size={14} color="#0D9488" style={tw`mr-1.5`} />
+            <Text style={[tw`text-xs font-extrabold`, isDark ? tw`text-zinc-100` : tw`text-gray-900`]}>
+              Date: {booking.serviceDate || booking.dateTime}
+            </Text>
+          </View>
+          <View style={tw`flex-row items-center`}>
+            <Clock size={13} color="#0D9488" style={tw`mr-1`} />
+            <Text style={[tw`text-xs font-bold text-teal-700 dark:text-teal-400`]}>
+              Slot: {booking.serviceTime || 'Standard'}
+            </Text>
+          </View>
+        </View>
+
+        {/* Customer Info Strip */}
+        <View style={[tw`p-2.5 rounded-xl mb-2.5 flex-row items-center justify-between`, isDark ? tw`bg-zinc-800/60` : tw`bg-gray-50`]}>
+          <View style={tw`flex-row items-center flex-1 mr-2`}>
+            <Users size={14} color="#6B7280" style={tw`mr-1.5`} />
+            <Text style={[tw`text-xs font-bold`, isDark ? tw`text-zinc-200` : tw`text-gray-800`]} numberOfLines={1}>
+              {booking.customer}
+            </Text>
+          </View>
+          {booking.phone ? (
+            <View style={tw`flex-row items-center`}>
+              <Phone size={12} color="#6B7280" style={tw`mr-1`} />
+              <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>
+                {booking.phone}
+              </Text>
+            </View>
+          ) : null}
+        </View>
+
+        {/* Service Location */}
+        {booking.serviceLocation || booking.customerAddress ? (
+          <View style={[tw`p-2.5 rounded-xl mb-2.5 flex-row items-center`, isDark ? tw`bg-zinc-800/60` : tw`bg-teal-50/30`]}>
+            <MapPin size={13} color="#0D9488" style={tw`mr-1.5`} />
+            <Text style={[tw`text-xs flex-1 font-semibold`, isDark ? tw`text-zinc-300` : tw`text-teal-900`]} numberOfLines={2}>
+              {booking.serviceLocation || booking.customerAddress}
+            </Text>
+          </View>
+        ) : null}
+
+        {/* Footer Row */}
+        <View style={[tw`flex-row items-center justify-between pt-2.5 border-t`, isDark ? tw`border-zinc-800` : tw`border-gray-100`]}>
+          <Text style={[tw`text-base font-extrabold text-teal-600 dark:text-teal-400`]}>
+            {booking.amount}
+          </Text>
+          <ChevronRight size={16} color="#9CA3AF" />
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
+  const renderJobItemCard = (order: Order) => {
+    const config = statusConfig[order.status] || {
+      color: '#4B5563',
+      bgColor: '#F3F4F6',
+    };
+
+    return (
+      <TouchableOpacity
+        key={order.id}
+        activeOpacity={0.7}
+        onPress={() => setSelectedOrder(order)}
+        style={[
+          tw`rounded-2xl p-4 mb-3 border`,
+          isDark ? tw`bg-zinc-900 border-zinc-800` : tw`bg-white border-purple-100`,
+          {
+            shadowColor: '#8B5CF6',
+            shadowOffset: {width: 0, height: 2},
+            shadowOpacity: 0.05,
+            shadowRadius: 8,
+            elevation: 2,
+          },
+        ]}>
+        {/* Tier 1 Header: Application Tag + Application ID (Left), Status Badge (Right) */}
+        <View style={tw`flex-row items-center justify-between mb-2`}>
+          <View style={tw`flex-row items-center flex-1 mr-2 flex-shrink`}>
+            <View style={[tw`flex-row items-center px-2 py-0.5 rounded-full mr-1.5 flex-shrink-0`, isDark ? tw`bg-purple-950/60` : tw`bg-purple-50`]}>
+              <Briefcase size={11} color="#8B5CF6" style={tw`mr-1`} />
+              <Text style={tw`text-[10px] font-black text-purple-700 dark:text-purple-400 tracking-wider`}>JOB APPLICATION</Text>
+            </View>
+            <Text style={[tw`font-extrabold text-xs font-mono flex-shrink`, isDark ? tw`text-white` : tw`text-gray-900`]} numberOfLines={1}>
+              {formatDisplayId(order.id, 'APP')}
+            </Text>
+          </View>
+          <View style={[tw`px-2.5 py-1 rounded-full flex-shrink-0`, {backgroundColor: config.bgColor}]}>
+            <Text style={[tw`text-[11px] font-bold`, {color: config.color}]}>
+              {order.status}
+            </Text>
+          </View>
+        </View>
+
+        {/* Tier 2 Header: Candidate Application Sub-strip */}
+        <View style={[tw`flex-row items-center justify-between pb-2 mb-2.5 border-b`, isDark ? tw`border-zinc-800` : tw`border-gray-100`]}>
+          <Text style={[tw`text-[10px] font-bold uppercase text-purple-600 dark:text-purple-400`]}>Direct Application</Text>
+          <Text style={[tw`text-[11px] font-medium`, isDark ? tw`text-zinc-400` : tw`text-gray-400`]}>
+            {order.dateTime || 'Applied recently'}
+          </Text>
+        </View>
+
+        {/* Candidate Name & Contact Details */}
+        <View style={tw`mb-2.5`}>
+          <Text style={[tw`text-base font-extrabold`, isDark ? tw`text-white` : tw`text-gray-900`]} numberOfLines={1}>
+            {order.customerName}
+          </Text>
+          <View style={tw`flex-row items-center mt-1 flex-wrap gap-x-3 gap-y-1`}>
+            {order.customerPhone ? (
+              <View style={tw`flex-row items-center`}>
+                <Phone size={12} color="#6B7280" style={tw`mr-1`} />
+                <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-300` : tw`text-gray-600`]}>
+                  {order.customerPhone}
+                </Text>
+              </View>
+            ) : null}
+            {order.candidateEmail ? (
+              <View style={tw`flex-row items-center`}>
+                <Mail size={12} color="#6B7280" style={tw`mr-1`} />
+                <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>
+                  {order.candidateEmail}
+                </Text>
+              </View>
+            ) : null}
+          </View>
+        </View>
+
+        {/* Job Position & Reference ID Box */}
+        <View style={[tw`p-2.5 rounded-xl mb-2.5`, isDark ? tw`bg-zinc-800/80` : tw`bg-purple-50/50`]}>
+          <Text style={[tw`text-xs font-extrabold text-purple-700 dark:text-purple-300`]}>
+            Role: {order.jobTitle || order.name}
+          </Text>
+          <View style={tw`flex-row items-center justify-between mt-1`}>
+            <Text style={[tw`text-[10px] font-mono`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
+              App ID: <Text style={tw`font-bold text-indigo-500`}>{formatDisplayId(order.id, 'APP')}</Text>
+            </Text>
+            {order.jobId && order.jobId !== 'N/A' ? (
+              <Text style={[tw`text-[10px] font-mono`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
+                Job ID: {formatDisplayId(order.jobId, 'JOB')}
+              </Text>
+            ) : null}
+          </View>
+        </View>
+
+        {/* Profile Highlights: Education, Experience, Resume */}
+        <View style={tw`flex-row items-center flex-wrap gap-1.5 mb-2.5`}>
+          <View style={[tw`px-2 py-0.5 rounded-md flex-row items-center`, isDark ? tw`bg-zinc-800` : tw`bg-gray-100`]}>
+            <GraduationCap size={11} color="#6B7280" style={tw`mr-1`} />
+            <Text style={[tw`text-[10px] font-semibold`, isDark ? tw`text-zinc-300` : tw`text-gray-700`]}>
+              {order.candidateEducation || 'Graduate'}
+            </Text>
+          </View>
+          <View style={[tw`px-2 py-0.5 rounded-md flex-row items-center`, isDark ? tw`bg-zinc-800` : tw`bg-gray-100`]}>
+            <Briefcase size={11} color="#6B7280" style={tw`mr-1`} />
+            <Text style={[tw`text-[10px] font-semibold`, isDark ? tw`text-zinc-300` : tw`text-gray-700`]}>
+              Exp: {order.candidateExperience || 'Fresher'}
+            </Text>
+          </View>
+          {order.candidateResume ? (
+            <View style={[tw`px-2 py-0.5 rounded-md flex-row items-center`, isDark ? tw`bg-indigo-950/60` : tw`bg-indigo-50`]}>
+              <FileText size={11} color="#6366F1" style={tw`mr-1`} />
+              <Text style={[tw`text-[10px] font-bold text-indigo-600`]}>
+                CV Attached
+              </Text>
+            </View>
+          ) : null}
+        </View>
+
+        {/* Footer Row: Applied Date + Details Arrow */}
+        <View style={[tw`flex-row items-center justify-between pt-2.5 border-t`, isDark ? tw`border-zinc-800` : tw`border-gray-100`]}>
+          <View style={tw`flex-row items-center`}>
+            <Clock size={12} color="#9CA3AF" style={tw`mr-1.5`} />
+            <Text style={[tw`text-xs font-medium`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]} numberOfLines={1}>
+              Applied: {order.dateTime}
+            </Text>
+          </View>
+          <ChevronRight size={16} color="#9CA3AF" />
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
   const renderBusBookingCard = (item: any) => {
     const raw = item.rawOrder || item;
     const travelers = Array.isArray(raw.travelers) && raw.travelers.length > 0 ? raw.travelers : [];
@@ -1934,779 +2647,132 @@ export default function OrdersScreen({
         </ScrollView>
       </View>
 
-      {/* List Content */}
-      <ScrollView
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={tw`px-5 pt-4 pb-6`}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={handleRefresh}
-            colors={['#4F46E5']}
-            tintColor="#4F46E5"
-          />
-        }>
-        {((activeSegment === 'Orders' && loadingOrders && ordersRaw.length === 0) ||
-          (activeSegment === 'Bookings' && loadingBookings && bookingsRaw.length === 0) ||
-          (activeSegment === 'Jobs' && loadingJobs && jobsRaw.length === 0)) ? (
-          <View style={tw`py-16 items-center justify-center`}>
-            <ActivityIndicator size="large" color="#4F46E5" />
-            <Text style={[tw`mt-3 text-xs font-medium`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
-              Loading {activeSegment === 'Orders' ? 'Orders' : activeSegment === 'Bookings' ? 'Bookings' : 'Jobs'}...
-            </Text>
-          </View>
-        ) : null}
-
-        {/* Orders Container */}
-        {visitedSegments.has('Orders') && (
-          <View style={activeSegment === 'Orders' ? tw`flex` : tw`hidden`}>
-            {filteredOrders.length === 0 && !loadingOrders ? (
+      {/* List Content - High Performance Virtualized FlatLists (< 100ms render, 60fps) */}
+      {activeSegment === 'Orders' && (
+        <FlatList
+          data={filteredOrders}
+          keyExtractor={(item) => String(item.id)}
+          renderItem={({ item }) => renderOrderItemCard(item)}
+          contentContainerStyle={tw`px-5 pt-4 pb-6`}
+          showsVerticalScrollIndicator={false}
+          initialNumToRender={8}
+          maxToRenderPerBatch={10}
+          windowSize={5}
+          removeClippedSubviews={Platform.OS === 'android'}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={handleRefresh}
+              colors={['#4F46E5']}
+              tintColor="#4F46E5"
+            />
+          }
+          ListHeaderComponent={
+            loadingOrders && ordersRaw.length === 0 ? (
+              <View style={tw`py-16 items-center justify-center`}>
+                <ActivityIndicator size="large" color="#4F46E5" />
+                <Text style={[tw`mt-3 text-xs font-medium`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
+                  Loading Orders...
+                </Text>
+              </View>
+            ) : null
+          }
+          ListEmptyComponent={
+            !loadingOrders && filteredOrders.length === 0 ? (
               <View style={tw`py-16 items-center justify-center`}>
                 <Package size={48} color={isDark ? '#52525B' : '#D1D5DB'} />
                 <Text style={[tw`mt-4 text-base font-bold`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
                   No Orders Found
                 </Text>
               </View>
-            ) : (
-              filteredOrders.map(order => {
-              const config = statusConfig[order.status] || {
-                color: '#4B5563',
-                bgColor: '#F3F4F6',
-              };
-              const isPaid = String(order.paymentStatus || '').toLowerCase() === 'paid' || String(order.paymentStatus || '').toLowerCase() === 'completed';
-              const isFailed = String(order.paymentStatus || '').toLowerCase() === 'failed';
-              const pMethod = (order.paymentMethod || order.rawOrder?.paymentMethod || order.rawOrder?.payment_method || '').toLowerCase();
-              const isCod = pMethod.includes('cod') || pMethod.includes('cash');
+            ) : null
+          }
+        />
+      )}
 
-              return (
-                <TouchableOpacity
-                  key={order.id}
-                  activeOpacity={0.7}
-                  onPress={() => setSelectedOrder(order)}
-                  style={[
-                    tw`rounded-2xl p-4 mb-3 border`,
-                    isDark ? tw`bg-zinc-900 border-zinc-800` : tw`bg-white border-gray-100`,
-                    {
-                      shadowColor: '#000',
-                      shadowOffset: {width: 0, height: 2},
-                      shadowOpacity: 0.05,
-                      shadowRadius: 8,
-                      elevation: 2,
-                    },
-                  ]}>
-                  {/* Tier 1 Header: Category Badge + Order ID (Left), Order Delivery Status Badge (Right) */}
-                  <View style={tw`flex-row items-center justify-between mb-2`}>
-                    <View style={tw`flex-row items-center flex-1 mr-2`}>
-                      <View style={[tw`flex-row items-center px-2.5 py-1 rounded-full mr-2`, isDark ? tw`bg-indigo-950/60` : tw`bg-indigo-50`]}>
-                        <Package size={12} color="#4F46E5" style={tw`mr-1`} />
-                        <Text style={tw`text-[10px] font-black text-indigo-700 dark:text-indigo-400 tracking-wider`}>
-                          {order.category ? `${String(order.category).toUpperCase()} ORDER` : 'ORDER'}
-                        </Text>
-                      </View>
-                      <Text style={[tw`font-extrabold text-sm font-mono`, isDark ? tw`text-white` : tw`text-gray-900`]} numberOfLines={1}>
-                        #{order.id}
-                      </Text>
-                    </View>
-                    <View
-                      style={[
-                        tw`px-2.5 py-1 rounded-full`,
-                        {backgroundColor: config.bgColor},
-                      ]}>
-                      <Text
-                        style={[
-                          tw`text-[11px] font-bold`,
-                          {color: config.color},
-                        ]}>
-                        {order.status}
-                      </Text>
-                    </View>
-                  </View>
-
-                  {/* Tier 2 Header: Dedicated Payment Status Badge + Payment Method + Date/Time */}
-                  <View style={[tw`flex-row items-center justify-between pb-2 mb-2.5 border-b`, isDark ? tw`border-zinc-800` : tw`border-gray-100`]}>
-                    <View style={tw`flex-row items-center gap-1.5`}>
-                      <View
-                        style={[
-                          tw`px-2 py-0.5 rounded-md border`,
-                          isPaid
-                            ? (isDark ? tw`bg-emerald-950/60 border-emerald-800` : tw`bg-emerald-50 border-emerald-200`)
-                            : isCod
-                            ? (isDark ? tw`bg-amber-950/60 border-amber-800` : tw`bg-amber-50 border-amber-200`)
-                            : isFailed
-                            ? (isDark ? tw`bg-rose-950/60 border-rose-800` : tw`bg-rose-50 border-rose-200`)
-                            : (isDark ? tw`bg-amber-950/60 border-amber-800` : tw`bg-amber-50 border-amber-200`),
-                        ]}>
-                        <Text
-                          style={[
-                            tw`text-[10px] font-black uppercase tracking-wider`,
-                            isPaid
-                              ? tw`text-emerald-600`
-                              : isCod
-                              ? tw`text-amber-600`
-                              : isFailed
-                              ? tw`text-rose-600`
-                              : tw`text-amber-600`,
-                          ]}>
-                          {isPaid ? '✓ Paid' : isCod ? 'COD Pending' : isFailed ? '✕ Payment Failed' : (order.paymentStatus || 'Payment Pending')}
-                        </Text>
-                      </View>
-                      {pMethod ? (
-                        <View style={[tw`px-1.5 py-0.5 rounded`, isDark ? tw`bg-zinc-800` : tw`bg-gray-100`]}>
-                          <Text style={[tw`text-[9px] font-bold uppercase`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>
-                            {pMethod.toUpperCase()}
-                          </Text>
-                        </View>
-                      ) : null}
-                    </View>
-                    <Text style={[tw`text-[11px] font-medium`, isDark ? tw`text-zinc-400` : tw`text-gray-400`]}>
-                      {order.dateTime || ''}
-                    </Text>
-                  </View>
-
-                  {/* Body: Product Image + Product Details + Quantity */}
-                  <View style={tw`flex-row items-start mb-3`}>
-                    {order.image ? (
-                      <Image
-                        source={{ uri: formatImageUrl(order.image) }}
-                        style={tw`w-16 h-16 rounded-xl mr-3 bg-gray-100`}
-                      />
-                    ) : (
-                      <View style={[tw`w-16 h-16 rounded-xl mr-3 items-center justify-center`, isDark ? tw`bg-zinc-800` : tw`bg-gray-100`]}>
-                        <Package size={24} color="#6B7280" />
-                      </View>
-                    )}
-
-                    <View style={tw`flex-1`}>
-                      <Text style={[tw`font-bold text-sm`, isDark ? tw`text-zinc-100` : tw`text-gray-900`]} numberOfLines={2}>
-                        {order.name}
-                      </Text>
-                      <View style={tw`flex-row items-center mt-1 flex-wrap gap-1.5`}>
-                        <View style={[tw`px-2 py-0.5 rounded-md`, isDark ? tw`bg-zinc-800` : tw`bg-gray-100`]}>
-                          <Text style={[tw`text-[11px] font-semibold`, isDark ? tw`text-zinc-300` : tw`text-gray-600`]}>
-                            Qty: {order.quantity || 1}
-                          </Text>
-                        </View>
-                        <View style={[tw`px-2 py-0.5 rounded-md`, isDark ? tw`bg-zinc-800` : tw`bg-gray-100`]}>
-                          <Text style={[tw`text-[11px] font-semibold text-indigo-600`]}>
-                            {order.category || 'Product'}
-                          </Text>
-                        </View>
-                      </View>
-                    </View>
-                  </View>
-
-                  {/* Customer Info Strip */}
-                  <View style={[tw`p-2.5 rounded-xl mb-3 flex-row items-center justify-between`, isDark ? tw`bg-zinc-800/70` : tw`bg-gray-50`]}>
-                    <View style={tw`flex-row items-center flex-1 mr-2`}>
-                      <Users size={14} color="#6B7280" style={tw`mr-1.5`} />
-                      <Text style={[tw`text-xs font-bold`, isDark ? tw`text-zinc-200` : tw`text-gray-800`]} numberOfLines={1}>
-                        {order.customerName}
-                      </Text>
-                    </View>
-                    {order.customerPhone ? (
-                      <View style={tw`flex-row items-center`}>
-                        <Phone size={12} color="#6B7280" style={tw`mr-1`} />
-                        <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>
-                          {order.customerPhone}
-                        </Text>
-                      </View>
-                    ) : null}
-                  </View>
-
-                  {/* Footer Row: Date & Time + Amount + Arrow */}
-                  <View style={[tw`flex-row items-center justify-between pt-2.5 border-t`, isDark ? tw`border-zinc-800` : tw`border-gray-100`]}>
-                    <View style={tw`flex-row items-center`}>
-                      <Clock size={13} color="#9CA3AF" style={tw`mr-1.5`} />
-                      <Text style={[tw`text-xs font-medium`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
-                        {order.dateTime}
-                      </Text>
-                    </View>
-
-                    <View style={tw`flex-row items-center`}>
-                      <Text style={[tw`text-base font-extrabold mr-2`, isDark ? tw`text-white` : tw`text-gray-900`]}>
-                        {order.amount}
-                      </Text>
-                      <ChevronRight size={16} color="#9CA3AF" />
-                    </View>
-                  </View>
-                </TouchableOpacity>
-              );
-            }))}
-          </View>
-        )}
-
-        {/* Bookings Container */}
-        {visitedSegments.has('Bookings') && (
-          <View style={activeSegment === 'Bookings' ? tw`flex` : tw`hidden`}>
-            {filteredBookings.length === 0 && !loadingBookings ? (
+      {activeSegment === 'Bookings' && (
+        <FlatList
+          data={filteredBookings}
+          keyExtractor={(item) => String(item.id)}
+          renderItem={({ item }) => renderBookingItemCard(item)}
+          contentContainerStyle={tw`px-5 pt-4 pb-6`}
+          showsVerticalScrollIndicator={false}
+          initialNumToRender={8}
+          maxToRenderPerBatch={10}
+          windowSize={5}
+          removeClippedSubviews={Platform.OS === 'android'}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={handleRefresh}
+              colors={['#4F46E5']}
+              tintColor="#4F46E5"
+            />
+          }
+          ListHeaderComponent={
+            loadingBookings && bookingsRaw.length === 0 ? (
+              <View style={tw`py-16 items-center justify-center`}>
+                <ActivityIndicator size="large" color="#4F46E5" />
+                <Text style={[tw`mt-3 text-xs font-medium`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
+                  Loading Bookings...
+                </Text>
+              </View>
+            ) : null
+          }
+          ListEmptyComponent={
+            !loadingBookings && filteredBookings.length === 0 ? (
               <View style={tw`py-16 items-center justify-center`}>
                 <CalendarCheck size={48} color={isDark ? '#52525B' : '#D1D5DB'} />
                 <Text style={[tw`mt-4 text-base font-bold`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
                   No Bookings Found
                 </Text>
               </View>
-            ) : (
-              filteredBookings.map(booking => {
-              if (booking.isBusBooking) {
-                return renderBusBookingCard(booking);
-              }
-              const config = (bookingStatusConfig as any)[booking.status] || {
-                color: '#4B5563',
-                bgColor: '#F3F4F6',
-                icon: Clock,
-              };
-              const isPaid = String(booking.paymentStatus || '').toLowerCase() === 'paid' || String(booking.paymentStatus || '').toLowerCase() === 'completed';
-              const isFailed = String(booking.paymentStatus || '').toLowerCase() === 'failed';
-              const pMethod = (booking.paymentMethod || booking.rawOrder?.paymentMethod || booking.rawOrder?.payment_method || '').toLowerCase();
-              const isCod = pMethod.includes('cod') || pMethod.includes('cash') || pMethod.includes('hotel') || pMethod.includes('pay at hotel');
+            ) : null
+          }
+        />
+      )}
 
-              if (booking.bookingCategory === 'Stay') {
-                return (
-                  <TouchableOpacity
-                    key={booking.id}
-                    activeOpacity={0.7}
-                    onPress={() => setSelectedBooking(booking)}
-                    style={[
-                      tw`rounded-2xl p-4 mb-3 border`,
-                      isDark ? tw`bg-zinc-900 border-zinc-800` : tw`bg-white border-amber-100`,
-                      {
-                        shadowColor: '#F59E0B',
-                        shadowOffset: {width: 0, height: 2},
-                        shadowOpacity: 0.05,
-                        shadowRadius: 8,
-                        elevation: 2,
-                      },
-                    ]}>
-                    {/* Tier 1 Header: Stay Tag + Booking ID (Left), Status Badge (Right) */}
-                    <View style={tw`flex-row items-center justify-between mb-2`}>
-                      <View style={tw`flex-row items-center flex-1 mr-2`}>
-                        <View style={[tw`flex-row items-center px-2.5 py-1 rounded-full mr-2`, isDark ? tw`bg-amber-950/60` : tw`bg-amber-50`]}>
-                          <CalendarCheck size={12} color="#D97706" style={tw`mr-1`} />
-                          <Text style={tw`text-[10px] font-black text-amber-700 dark:text-amber-400 tracking-wider`}>{booking.bookingBadgeLabel || 'STAY BOOKING'}</Text>
-                        </View>
-                        <Text style={[tw`font-extrabold text-sm font-mono`, isDark ? tw`text-white` : tw`text-gray-900`]} numberOfLines={1}>
-                          #{booking.id}
-                        </Text>
-                      </View>
-                      <View style={[tw`px-2.5 py-1 rounded-full`, {backgroundColor: config.bgColor}]}>
-                        <Text style={[tw`text-[11px] font-bold`, {color: config.color}]}>
-                          {booking.status}
-                        </Text>
-                      </View>
-                    </View>
-
-                    {/* Tier 2 Header: Dedicated Payment Status Badge + Payment Method + Date/Time */}
-                    <View style={[tw`flex-row items-center justify-between pb-2 mb-2.5 border-b`, isDark ? tw`border-zinc-800` : tw`border-gray-100`]}>
-                      <View style={tw`flex-row items-center gap-1.5`}>
-                        <View
-                          style={[
-                            tw`px-2 py-0.5 rounded-md border`,
-                            isPaid
-                              ? (isDark ? tw`bg-emerald-950/60 border-emerald-800` : tw`bg-emerald-50 border-emerald-200`)
-                              : isCod
-                              ? (isDark ? tw`bg-amber-950/60 border-amber-800` : tw`bg-amber-50 border-amber-200`)
-                              : isFailed
-                              ? (isDark ? tw`bg-rose-950/60 border-rose-800` : tw`bg-rose-50 border-rose-200`)
-                              : (isDark ? tw`bg-amber-950/60 border-amber-800` : tw`bg-amber-50 border-amber-200`),
-                          ]}>
-                          <Text style={[tw`text-[10px] font-black uppercase tracking-wider`, isPaid ? tw`text-emerald-600` : isCod ? tw`text-amber-600` : isFailed ? tw`text-rose-600` : tw`text-amber-600`]}>
-                            {isPaid ? '✓ Paid' : isCod ? 'Pay at Hotel' : isFailed ? '✕ Payment Failed' : (booking.paymentStatus || 'Payment Pending')}
-                          </Text>
-                        </View>
-                        {pMethod ? (
-                          <View style={[tw`px-1.5 py-0.5 rounded`, isDark ? tw`bg-zinc-800` : tw`bg-gray-100`]}>
-                            <Text style={[tw`text-[9px] font-bold uppercase`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>
-                              {pMethod.toUpperCase()}
-                            </Text>
-                          </View>
-                        ) : null}
-                      </View>
-                      <Text style={[tw`text-[11px] font-medium`, isDark ? tw`text-zinc-400` : tw`text-gray-400`]}>
-                        Check-in: {booking.checkInDate || ''}
-                      </Text>
-                    </View>
-
-                    {/* Property Name & Accommodation */}
-                    <View style={tw`mb-2.5`}>
-                      <Text style={[tw`text-base font-extrabold`, isDark ? tw`text-white` : tw`text-gray-900`]}>
-                        {booking.propertyName || 'Hotel Stay'}
-                      </Text>
-                      <Text style={[tw`text-xs mt-0.5`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
-                        Booking ID: <Text style={tw`font-mono font-bold text-amber-600 dark:text-amber-400`}>#{booking.id}</Text>
-                        {booking.roomName ? ` • ${booking.roomName}` : ''}
-                      </Text>
-                    </View>
-
-                    {/* Schedule Strip: Check-in and Check-out Displayed Separately */}
-                    <View style={[tw`p-2.5 rounded-xl mb-2.5 flex-row items-center justify-between`, isDark ? tw`bg-zinc-800/80` : tw`bg-amber-50/50`]}>
-                      <View style={tw`flex-1 mr-2`}>
-                        <Text style={tw`text-[10px] uppercase font-bold text-emerald-600 dark:text-emerald-400`}>Check-In</Text>
-                        <Text style={[tw`text-xs font-extrabold mt-0.5`, isDark ? tw`text-zinc-100` : tw`text-gray-900`]}>
-                          {booking.checkInDate}
-                        </Text>
-                        <Text style={[tw`text-[10px]`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
-                          {booking.checkInTime}
-                        </Text>
-                      </View>
-                      <View style={tw`h-8 w-[1px] bg-gray-200 dark:bg-zinc-700 mr-2`} />
-                      <View style={tw`flex-1`}>
-                        <Text style={tw`text-[10px] uppercase font-bold text-amber-600 dark:text-amber-400`}>Check-Out</Text>
-                        <Text style={[tw`text-xs font-extrabold mt-0.5`, isDark ? tw`text-zinc-100` : tw`text-gray-900`]}>
-                          {booking.checkOutDate}
-                        </Text>
-                        <Text style={[tw`text-[10px]`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
-                          {booking.checkOutTime}
-                        </Text>
-                      </View>
-                    </View>
-
-                    {/* Guest & Customer Info */}
-                    <View style={[tw`p-2.5 rounded-xl mb-2.5 flex-row items-center justify-between`, isDark ? tw`bg-zinc-800/60` : tw`bg-gray-50`]}>
-                      <View style={tw`flex-row items-center flex-1 mr-2`}>
-                        <Users size={14} color="#6B7280" style={tw`mr-1.5`} />
-                        <Text style={[tw`text-xs font-bold`, isDark ? tw`text-zinc-200` : tw`text-gray-800`]} numberOfLines={1}>
-                          {booking.customer} ({booking.guestCount || 1} Guests)
-                        </Text>
-                      </View>
-                      {booking.phone ? (
-                        <View style={tw`flex-row items-center`}>
-                          <Phone size={12} color="#6B7280" style={tw`mr-1`} />
-                          <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>
-                            {booking.phone}
-                          </Text>
-                        </View>
-                      ) : null}
-                    </View>
-
-                    {/* Footer Row */}
-                    <View style={[tw`flex-row items-center justify-between pt-2.5 border-t`, isDark ? tw`border-zinc-800` : tw`border-gray-100`]}>
-                      <Text style={[tw`text-base font-extrabold text-amber-600 dark:text-amber-400`]}>
-                        {booking.amount}
-                      </Text>
-                      <ChevronRight size={16} color="#9CA3AF" />
-                    </View>
-                  </TouchableOpacity>
-                );
-              }
-
-              if (booking.bookingCategory === 'Travel') {
-                return (
-                  <TouchableOpacity
-                    key={booking.id}
-                    activeOpacity={0.7}
-                    onPress={() => setSelectedBooking(booking)}
-                    style={[
-                      tw`rounded-2xl p-4 mb-3 border`,
-                      isDark ? tw`bg-zinc-900 border-zinc-800` : tw`bg-white border-blue-100`,
-                      {
-                        shadowColor: '#2563EB',
-                        shadowOffset: {width: 0, height: 2},
-                        shadowOpacity: 0.05,
-                        shadowRadius: 8,
-                        elevation: 2,
-                      },
-                    ]}>
-                    {/* Tier 1 Header: Travel Tag + Booking ID (Left), Status Badge (Right) */}
-                    <View style={tw`flex-row items-center justify-between mb-2`}>
-                      <View style={tw`flex-row items-center flex-1 mr-2`}>
-                        <View style={[tw`flex-row items-center px-2.5 py-1 rounded-full mr-2`, isDark ? tw`bg-blue-950/60` : tw`bg-blue-50`]}>
-                          <Compass size={12} color="#2563EB" style={tw`mr-1`} />
-                          <Text style={tw`text-[10px] font-black text-blue-700 dark:text-blue-400 tracking-wider`}>{booking.bookingBadgeLabel || 'TRAVEL BOOKING'}</Text>
-                        </View>
-                        <Text style={[tw`font-extrabold text-sm font-mono`, isDark ? tw`text-white` : tw`text-gray-900`]} numberOfLines={1}>
-                          #{booking.id}
-                        </Text>
-                      </View>
-                      <View style={[tw`px-2.5 py-1 rounded-full`, {backgroundColor: config.bgColor}]}>
-                        <Text style={[tw`text-[11px] font-bold`, {color: config.color}]}>
-                          {booking.status}
-                        </Text>
-                      </View>
-                    </View>
-
-                    {/* Tier 2 Header: Dedicated Payment Status Badge + Payment Method + Date/Time */}
-                    <View style={[tw`flex-row items-center justify-between pb-2 mb-2.5 border-b`, isDark ? tw`border-zinc-800` : tw`border-gray-100`]}>
-                      <View style={tw`flex-row items-center gap-1.5`}>
-                        <View
-                          style={[
-                            tw`px-2 py-0.5 rounded-md border`,
-                            isPaid
-                              ? (isDark ? tw`bg-emerald-950/60 border-emerald-800` : tw`bg-emerald-50 border-emerald-200`)
-                              : isCod
-                              ? (isDark ? tw`bg-amber-950/60 border-amber-800` : tw`bg-amber-50 border-amber-200`)
-                              : isFailed
-                              ? (isDark ? tw`bg-rose-950/60 border-rose-800` : tw`bg-rose-50 border-rose-200`)
-                              : (isDark ? tw`bg-amber-950/60 border-amber-800` : tw`bg-amber-50 border-amber-200`),
-                          ]}>
-                          <Text style={[tw`text-[10px] font-black uppercase tracking-wider`, isPaid ? tw`text-emerald-600` : isCod ? tw`text-amber-600` : isFailed ? tw`text-rose-600` : tw`text-amber-600`]}>
-                            {isPaid ? '✓ Paid' : isCod ? 'COD Pending' : isFailed ? '✕ Payment Failed' : (booking.paymentStatus || 'Payment Pending')}
-                          </Text>
-                        </View>
-                        {pMethod ? (
-                          <View style={[tw`px-1.5 py-0.5 rounded`, isDark ? tw`bg-zinc-800` : tw`bg-gray-100`]}>
-                            <Text style={[tw`text-[9px] font-bold uppercase`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>
-                              {pMethod.toUpperCase()}
-                            </Text>
-                          </View>
-                        ) : null}
-                      </View>
-                      <Text style={[tw`text-[11px] font-medium`, isDark ? tw`text-zinc-400` : tw`text-gray-400`]}>
-                        {booking.travelDate || ''}
-                      </Text>
-                    </View>
-
-                    {/* Travel Option Name & Booking ID */}
-                    <View style={tw`mb-2.5`}>
-                      <Text style={[tw`text-base font-extrabold`, isDark ? tw`text-white` : tw`text-gray-900`]}>
-                        {booking.travelOptionName || 'Travel Booking'}
-                      </Text>
-                      <Text style={[tw`text-xs mt-0.5`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
-                        Booking ID: <Text style={tw`font-mono font-bold text-blue-600 dark:text-blue-400`}>#{booking.id}</Text>
-                        {booking.travelDate ? ` • ${booking.travelDate} at ${booking.departureTime}` : ''}
-                      </Text>
-                    </View>
-
-                    {/* Route Strip: Origin ➔ Destination */}
-                    <View style={[tw`p-2.5 rounded-xl mb-2.5 flex-row items-center justify-between`, isDark ? tw`bg-zinc-800/80` : tw`bg-blue-50/50`]}>
-                      <View style={tw`flex-1`}>
-                        <Text style={tw`text-[10px] uppercase font-bold text-gray-400`}>From</Text>
-                        <Text style={[tw`text-xs font-extrabold mt-0.5`, isDark ? tw`text-zinc-100` : tw`text-gray-900`]} numberOfLines={1}>
-                          {booking.pickupLocation || 'Origin'}
-                        </Text>
-                      </View>
-                      <View style={tw`px-2 items-center`}>
-                        <Text style={tw`text-xs font-bold text-blue-500`}>➔</Text>
-                      </View>
-                      <View style={tw`flex-1 items-end`}>
-                        <Text style={tw`text-[10px] uppercase font-bold text-gray-400`}>To</Text>
-                        <Text style={[tw`text-xs font-extrabold mt-0.5`, isDark ? tw`text-zinc-100` : tw`text-gray-900`]} numberOfLines={1}>
-                          {booking.destinationLocation || 'Destination'}
-                        </Text>
-                      </View>
-                    </View>
-
-                    {/* Passenger & Customer Info */}
-                    <View style={[tw`p-2.5 rounded-xl mb-2.5 flex-row items-center justify-between`, isDark ? tw`bg-zinc-800/60` : tw`bg-gray-50`]}>
-                      <View style={tw`flex-row items-center flex-1 mr-2`}>
-                        <Users size={14} color="#6B7280" style={tw`mr-1.5`} />
-                        <Text style={[tw`text-xs font-bold`, isDark ? tw`text-zinc-200` : tw`text-gray-800`]} numberOfLines={1}>
-                          {booking.customer} ({booking.passengerCount || 1} Pax)
-                        </Text>
-                      </View>
-                      {booking.phone ? (
-                        <View style={tw`flex-row items-center`}>
-                          <Phone size={12} color="#6B7280" style={tw`mr-1`} />
-                          <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>
-                            {booking.phone}
-                          </Text>
-                        </View>
-                      ) : null}
-                    </View>
-
-                    {/* Footer Row */}
-                    <View style={[tw`flex-row items-center justify-between pt-2.5 border-t`, isDark ? tw`border-zinc-800` : tw`border-gray-100`]}>
-                      <Text style={[tw`text-base font-extrabold text-blue-600 dark:text-blue-400`]}>
-                        {booking.amount}
-                      </Text>
-                      <ChevronRight size={16} color="#9CA3AF" />
-                    </View>
-                  </TouchableOpacity>
-                );
-              }
-
-              // Default: Services Booking Card
-              return (
-                <TouchableOpacity
-                  key={booking.id}
-                  activeOpacity={0.7}
-                  onPress={() => setSelectedBooking(booking)}
-                  style={[
-                    tw`rounded-2xl p-4 mb-3 border`,
-                    isDark ? tw`bg-zinc-900 border-zinc-800` : tw`bg-white border-teal-100`,
-                    {
-                      shadowColor: '#0D9488',
-                      shadowOffset: {width: 0, height: 2},
-                      shadowOpacity: 0.05,
-                      shadowRadius: 8,
-                      elevation: 2,
-                    },
-                  ]}>
-                  {/* Tier 1 Header: Service Tag + Booking ID (Left), Status Badge (Right) */}
-                  <View style={tw`flex-row items-center justify-between mb-2`}>
-                    <View style={tw`flex-row items-center flex-1 mr-2`}>
-                      <View style={[
-                        tw`flex-row items-center px-2.5 py-1 rounded-full mr-2`,
-                        booking.bookingCategory === 'Unknown'
-                          ? (isDark ? tw`bg-zinc-800` : tw`bg-gray-100`)
-                          : (isDark ? tw`bg-teal-950/60` : tw`bg-teal-50`)
-                      ]}>
-                        <CalendarCheck size={12} color={booking.bookingCategory === 'Unknown' ? (isDark ? '#A1A1AA' : '#6B7280') : '#0D9488'} style={tw`mr-1`} />
-                        <Text style={[
-                          tw`text-[10px] font-black tracking-wider`,
-                          booking.bookingCategory === 'Unknown'
-                            ? (isDark ? tw`text-zinc-400` : tw`text-gray-600`)
-                            : tw`text-teal-700 dark:text-teal-400`
-                        ]}>
-                          {booking.bookingBadgeLabel || 'SERVICE BOOKING'}
-                        </Text>
-                      </View>
-                      <Text style={[tw`font-extrabold text-sm font-mono`, isDark ? tw`text-white` : tw`text-gray-900`]} numberOfLines={1}>
-                        #{booking.id}
-                      </Text>
-                    </View>
-                    <View style={[tw`px-2.5 py-1 rounded-full`, {backgroundColor: config.bgColor}]}>
-                      <Text style={[tw`text-[11px] font-bold`, {color: config.color}]}>
-                        {booking.status}
-                      </Text>
-                    </View>
-                  </View>
-
-                  {/* Tier 2 Header: Dedicated Payment Status Badge + Payment Method + Date/Time */}
-                  <View style={[tw`flex-row items-center justify-between pb-2 mb-2.5 border-b`, isDark ? tw`border-zinc-800` : tw`border-gray-100`]}>
-                    <View style={tw`flex-row items-center gap-1.5`}>
-                      <View
-                        style={[
-                          tw`px-2 py-0.5 rounded-md border`,
-                          isPaid
-                            ? (isDark ? tw`bg-emerald-950/60 border-emerald-800` : tw`bg-emerald-50 border-emerald-200`)
-                            : isCod
-                            ? (isDark ? tw`bg-amber-950/60 border-amber-800` : tw`bg-amber-50 border-amber-200`)
-                            : isFailed
-                            ? (isDark ? tw`bg-rose-950/60 border-rose-800` : tw`bg-rose-50 border-rose-200`)
-                            : (isDark ? tw`bg-amber-950/60 border-amber-800` : tw`bg-amber-50 border-amber-200`),
-                        ]}>
-                        <Text style={[tw`text-[10px] font-black uppercase tracking-wider`, isPaid ? tw`text-emerald-600` : isCod ? tw`text-amber-600` : isFailed ? tw`text-rose-600` : tw`text-amber-600`]}>
-                          {isPaid ? '✓ Paid' : isCod ? 'COD Pending' : isFailed ? '✕ Payment Failed' : (booking.paymentStatus || 'Payment Pending')}
-                        </Text>
-                      </View>
-                      {pMethod ? (
-                        <View style={[tw`px-1.5 py-0.5 rounded`, isDark ? tw`bg-zinc-800` : tw`bg-gray-100`]}>
-                          <Text style={[tw`text-[9px] font-bold uppercase`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>
-                            {pMethod.toUpperCase()}
-                          </Text>
-                        </View>
-                      ) : null}
-                    </View>
-                    <Text style={[tw`text-[11px] font-medium`, isDark ? tw`text-zinc-400` : tw`text-gray-400`]}>
-                      {booking.serviceDate || booking.serviceTime || ''}
-                    </Text>
-                  </View>
-
-                  {/* Service Name & Booking ID */}
-                  <View style={tw`mb-2.5`}>
-                    <Text style={[tw`text-base font-extrabold`, isDark ? tw`text-white` : tw`text-gray-900`]}>
-                      {booking.serviceName}
-                    </Text>
-                    {booking.packageName ? (
-                      <View style={[tw`mt-1 self-start px-2 py-0.5 rounded-md`, isDark ? tw`bg-teal-950/70` : tw`bg-teal-50`]}>
-                        <Text style={tw`text-[10px] font-bold text-teal-700 dark:text-teal-400`}>
-                          📦 {booking.packageName}
-                        </Text>
-                      </View>
-                    ) : null}
-                    <Text style={[tw`text-xs mt-1`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
-                      Booking ID: <Text style={tw`font-mono font-bold text-teal-600 dark:text-teal-400`}>#{booking.id}</Text>
-                    </Text>
-                  </View>
-
-                  {/* Schedule Box: Service Date and Time clearly visible */}
-                  <View style={[tw`p-2.5 rounded-xl mb-2.5 flex-row items-center justify-between`, isDark ? tw`bg-zinc-800/80` : tw`bg-teal-50/50`]}>
-                    <View style={tw`flex-row items-center flex-1 mr-2`}>
-                      <Calendar size={14} color="#0D9488" style={tw`mr-1.5`} />
-                      <Text style={[tw`text-xs font-extrabold`, isDark ? tw`text-zinc-100` : tw`text-gray-900`]}>
-                        Date: {booking.serviceDate || booking.dateTime}
-                      </Text>
-                    </View>
-                    <View style={tw`flex-row items-center`}>
-                      <Clock size={13} color="#0D9488" style={tw`mr-1`} />
-                      <Text style={[tw`text-xs font-bold text-teal-700 dark:text-teal-400`]}>
-                        Slot: {booking.serviceTime || 'Standard'}
-                      </Text>
-                    </View>
-                  </View>
-
-                  {/* Customer Info Strip */}
-                  <View style={[tw`p-2.5 rounded-xl mb-2.5 flex-row items-center justify-between`, isDark ? tw`bg-zinc-800/60` : tw`bg-gray-50`]}>
-                    <View style={tw`flex-row items-center flex-1 mr-2`}>
-                      <Users size={14} color="#6B7280" style={tw`mr-1.5`} />
-                      <Text style={[tw`text-xs font-bold`, isDark ? tw`text-zinc-200` : tw`text-gray-800`]} numberOfLines={1}>
-                        {booking.customer}
-                      </Text>
-                    </View>
-                    {booking.phone ? (
-                      <View style={tw`flex-row items-center`}>
-                        <Phone size={12} color="#6B7280" style={tw`mr-1`} />
-                        <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>
-                          {booking.phone}
-                        </Text>
-                      </View>
-                    ) : null}
-                  </View>
-
-                  {/* Service Execution Location / Address */}
-                  {(booking.serviceLocation || booking.customerAddress) ? (
-                    <View style={[tw`p-2.5 rounded-xl mb-2.5 flex-row items-start`, isDark ? tw`bg-zinc-800/40` : tw`bg-teal-50/40`]}>
-                      <MapPin size={13} color="#0D9488" style={tw`mr-1.5 mt-0.5 shrink-0`} />
-                      <Text style={[tw`text-xs flex-1 font-semibold`, isDark ? tw`text-zinc-300` : tw`text-teal-900`]} numberOfLines={2}>
-                        {booking.serviceLocation || booking.customerAddress}
-                      </Text>
-                    </View>
-                  ) : null}
-
-                  {/* Footer Row */}
-                  <View style={[tw`flex-row items-center justify-between pt-2.5 border-t`, isDark ? tw`border-zinc-800` : tw`border-gray-100`]}>
-                    <Text style={[tw`text-base font-extrabold text-teal-600 dark:text-teal-400`]}>
-                      {booking.amount}
-                    </Text>
-                    <ChevronRight size={16} color="#9CA3AF" />
-                  </View>
-                </TouchableOpacity>
-              );
-            }))}
-          </View>
-        )}
-
-        {/* Jobs Container */}
-        {visitedSegments.has('Jobs') && (
-          <View style={activeSegment === 'Jobs' ? tw`flex` : tw`hidden`}>
-            {filteredJobs.length === 0 && !loadingJobs ? (
+      {activeSegment === 'Jobs' && (
+        <FlatList
+          data={filteredJobs}
+          keyExtractor={(item) => String(item.id)}
+          renderItem={({ item }) => renderJobItemCard(item)}
+          contentContainerStyle={tw`px-5 pt-4 pb-6`}
+          showsVerticalScrollIndicator={false}
+          initialNumToRender={8}
+          maxToRenderPerBatch={10}
+          windowSize={5}
+          removeClippedSubviews={Platform.OS === 'android'}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={handleRefresh}
+              colors={['#4F46E5']}
+              tintColor="#4F46E5"
+            />
+          }
+          ListHeaderComponent={
+            loadingJobs && jobsRaw.length === 0 ? (
+              <View style={tw`py-16 items-center justify-center`}>
+                <ActivityIndicator size="large" color="#4F46E5" />
+                <Text style={[tw`mt-3 text-xs font-medium`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
+                  Loading Job Applications...
+                </Text>
+              </View>
+            ) : null
+          }
+          ListEmptyComponent={
+            !loadingJobs && filteredJobs.length === 0 ? (
               <View style={tw`py-16 items-center justify-center`}>
                 <Briefcase size={48} color={isDark ? '#52525B' : '#D1D5DB'} />
                 <Text style={[tw`mt-4 text-base font-bold`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
                   No Job Applications Found
                 </Text>
               </View>
-            ) : (
-              filteredJobs.map(order => {
-              const config = statusConfig[order.status] || {
-                color: '#4B5563',
-                bgColor: '#F3F4F6',
-              };
-
-              return (
-                <TouchableOpacity
-                  key={order.id}
-                  activeOpacity={0.7}
-                  onPress={() => setSelectedOrder(order)}
-                  style={[
-                    tw`rounded-2xl p-4 mb-3 border`,
-                    isDark ? tw`bg-zinc-900 border-zinc-800` : tw`bg-white border-purple-100`,
-                    {
-                      shadowColor: '#8B5CF6',
-                      shadowOffset: {width: 0, height: 2},
-                      shadowOpacity: 0.05,
-                      shadowRadius: 8,
-                      elevation: 2,
-                    },
-                  ]}>
-                  {/* Tier 1 Header: Application Tag + Application ID (Left), Status Badge (Right) */}
-                  <View style={tw`flex-row items-center justify-between mb-2`}>
-                    <View style={tw`flex-row items-center flex-1 mr-2 flex-shrink`}>
-                      <View style={[tw`flex-row items-center px-2 py-0.5 rounded-full mr-1.5 flex-shrink-0`, isDark ? tw`bg-purple-950/60` : tw`bg-purple-50`]}>
-                        <Briefcase size={11} color="#8B5CF6" style={tw`mr-1`} />
-                        <Text style={tw`text-[10px] font-black text-purple-700 dark:text-purple-400 tracking-wider`}>JOB APPLICATION</Text>
-                      </View>
-                      <Text style={[tw`font-extrabold text-xs font-mono flex-shrink`, isDark ? tw`text-white` : tw`text-gray-900`]} numberOfLines={1}>
-                        {formatDisplayId(order.id, 'APP')}
-                      </Text>
-                    </View>
-                    <View style={[tw`px-2.5 py-1 rounded-full flex-shrink-0`, {backgroundColor: config.bgColor}]}>
-                      <Text style={[tw`text-[11px] font-bold`, {color: config.color}]}>
-                        {order.status}
-                      </Text>
-                    </View>
-                  </View>
-
-                  {/* Tier 2 Header: Candidate Application Sub-strip */}
-                  <View style={[tw`flex-row items-center justify-between pb-2 mb-2.5 border-b`, isDark ? tw`border-zinc-800` : tw`border-gray-100`]}>
-                    <Text style={[tw`text-[10px] font-bold uppercase text-purple-600 dark:text-purple-400`]}>Direct Application</Text>
-                    <Text style={[tw`text-[11px] font-medium`, isDark ? tw`text-zinc-400` : tw`text-gray-400`]}>
-                      {order.dateTime || 'Applied recently'}
-                    </Text>
-                  </View>
-
-                  {/* Candidate Name & Contact Details */}
-                  <View style={tw`mb-2.5`}>
-                    <Text style={[tw`text-base font-extrabold`, isDark ? tw`text-white` : tw`text-gray-900`]}>
-                      {order.customerName}
-                    </Text>
-                    <View style={tw`flex-row items-center mt-1 flex-wrap gap-x-3 gap-y-1`}>
-                      {order.customerPhone ? (
-                        <View style={tw`flex-row items-center`}>
-                          <Phone size={12} color="#6B7280" style={tw`mr-1`} />
-                          <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-300` : tw`text-gray-600`]}>
-                            {order.customerPhone}
-                          </Text>
-                        </View>
-                      ) : null}
-                      {order.candidateEmail ? (
-                        <View style={tw`flex-row items-center`}>
-                          <Mail size={12} color="#6B7280" style={tw`mr-1`} />
-                          <Text style={[tw`text-xs font-semibold`, isDark ? tw`text-zinc-400` : tw`text-gray-600`]}>
-                            {order.candidateEmail}
-                          </Text>
-                        </View>
-                      ) : null}
-                    </View>
-                  </View>
-
-                  {/* Job Position & Reference ID Box */}
-                  <View style={[tw`p-2.5 rounded-xl mb-2.5`, isDark ? tw`bg-zinc-800/80` : tw`bg-purple-50/50`]}>
-                    <Text style={[tw`text-xs font-extrabold text-purple-700 dark:text-purple-300`]}>
-                      Role: {order.jobTitle || order.name}
-                    </Text>
-                    <View style={tw`flex-row items-center justify-between mt-1`}>
-                      <Text style={[tw`text-[10px] font-mono`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
-                        App ID: <Text style={tw`font-bold text-indigo-500`}>{formatDisplayId(order.id, 'APP')}</Text>
-                      </Text>
-                      {order.jobId && order.jobId !== 'N/A' ? (
-                        <Text style={[tw`text-[10px] font-mono`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
-                          Job ID: {formatDisplayId(order.jobId, 'JOB')}
-                        </Text>
-                      ) : null}
-                    </View>
-                  </View>
-
-                  {/* Profile Highlights: Education, Experience, Resume */}
-                  <View style={tw`flex-row items-center flex-wrap gap-1.5 mb-2.5`}>
-                    <View style={[tw`px-2 py-0.5 rounded-md flex-row items-center`, isDark ? tw`bg-zinc-800` : tw`bg-gray-100`]}>
-                      <GraduationCap size={11} color="#6B7280" style={tw`mr-1`} />
-                      <Text style={[tw`text-[10px] font-semibold`, isDark ? tw`text-zinc-300` : tw`text-gray-700`]}>
-                        {order.candidateEducation || 'Graduate'}
-                      </Text>
-                    </View>
-                    <View style={[tw`px-2 py-0.5 rounded-md flex-row items-center`, isDark ? tw`bg-zinc-800` : tw`bg-gray-100`]}>
-                      <Briefcase size={11} color="#6B7280" style={tw`mr-1`} />
-                      <Text style={[tw`text-[10px] font-semibold`, isDark ? tw`text-zinc-300` : tw`text-gray-700`]}>
-                        Exp: {order.candidateExperience || 'Fresher'}
-                      </Text>
-                    </View>
-                    {order.candidateResume ? (
-                      <View style={[tw`px-2 py-0.5 rounded-md flex-row items-center`, isDark ? tw`bg-indigo-950/60` : tw`bg-indigo-50`]}>
-                        <FileText size={11} color="#6366F1" style={tw`mr-1`} />
-                        <Text style={[tw`text-[10px] font-bold text-indigo-600`]}>
-                          CV Attached
-                        </Text>
-                      </View>
-                    ) : null}
-                  </View>
-
-                  {/* Footer Row: Applied Date + Details Arrow */}
-                  <View style={[tw`flex-row items-center justify-between pt-2.5 border-t`, isDark ? tw`border-zinc-800` : tw`border-gray-100`]}>
-                    <View style={tw`flex-row items-center`}>
-                      <Clock size={12} color="#9CA3AF" style={tw`mr-1.5`} />
-                      <Text style={[tw`text-xs font-medium`, isDark ? tw`text-zinc-400` : tw`text-gray-500`]}>
-                        Applied: {order.dateTime}
-                      </Text>
-                    </View>
-                    <ChevronRight size={16} color="#9CA3AF" />
-                  </View>
-                </TouchableOpacity>
-              );
-            }))}
-          </View>
-        )}
-      </ScrollView>
+            ) : null
+          }
+        />
+      )}
 
       {/* Order Detail Modal */}
       {selectedOrder && (() => {

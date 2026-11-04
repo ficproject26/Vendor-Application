@@ -175,17 +175,36 @@ class SessionManager {
   }
 
   /**
+   * Synchronously retrieve user-scoped cache item from fast memory cache (< 1ms)
+   */
+  getVendorCacheSync(vendorId: string, key: string, maxAgeMs: number = 86400000): any | null {
+    try {
+      const cacheKey = `v_${vendorId || 'default'}_${key}`;
+      const raw = memoryCache.get(cacheKey);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (Date.now() - parsed.savedAt > maxAgeMs) {
+        return null;
+      }
+      return parsed.data;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Retrieve user-scoped cache item
    */
   async getVendorCache(vendorId: string, key: string, maxAgeMs: number = 86400000): Promise<any | null> {
     try {
       const cacheKey = `v_${vendorId || 'default'}_${key}`;
-      let raw: string | null = null;
+      let raw: string | null = memoryCache.get(cacheKey) || null;
 
-      if (SecureAuthStorage?.getCacheData) {
+      if (!raw && SecureAuthStorage?.getCacheData) {
         raw = await SecureAuthStorage.getCacheData(cacheKey);
-      } else {
-        raw = memoryCache.get(cacheKey) || null;
+        if (raw) {
+          memoryCache.set(cacheKey, raw);
+        }
       }
 
       if (!raw) return null;
