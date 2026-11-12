@@ -198,9 +198,9 @@ export const getCandidateBaseUrls = (): string[] => {
   }
 
   // 1. Authoritative production backend URL (always primary)
-  const primaryUrl = BASE_URL || 'https://vendor.ficapp.in/api';
+  const primaryUrl = BASE_URL || 'https://connect-vendor-p1ij.onrender.com/api';
   list.push(primaryUrl);
-  list.push('https://vendor.ficapp.in/api');
+  list.push('https://connect-vendor-p1ij.onrender.com/api');
 
   // 2. Development & local fallback URLs ONLY in development mode (__DEV__)
   const isDev = typeof __DEV__ !== 'undefined' ? __DEV__ : false;
@@ -221,7 +221,7 @@ export const getWorkingSocketUrl = (): string => {
   if (cachedWorkingBaseUrl) {
     const url = cachedWorkingBaseUrl.replace(/\/api\/?$/, '');
     if (url.includes('vendor.ficapp.in')) {
-      return 'https://api.ficapp.in';
+      return 'https://connect-vendor-p1ij.onrender.com';
     }
     return url;
   }
@@ -229,7 +229,7 @@ export const getWorkingSocketUrl = (): string => {
   if (isDev) {
     return Platform.OS === 'android' ? 'http://10.0.2.2:8002' : 'http://localhost:8002';
   }
-  return 'https://api.ficapp.in';
+  return 'https://connect-vendor-p1ij.onrender.com';
 };
 
 // In-flight request deduplication and client response cache
@@ -453,9 +453,9 @@ export const formatImageUrl = (url: string | undefined | null): string => {
     return cUrl;
   }
 
-  let backend = (BASE_URL || 'https://vendor.ficapp.in/api').replace(/\/api\/?$/, '');
+  let backend = (BASE_URL || 'https://connect-vendor-p1ij.onrender.com/api').replace(/\/api\/?$/, '');
   if (!backend || !backend.startsWith('http')) {
-    backend = 'https://vendor.ficapp.in';
+    backend = 'https://connect-vendor-p1ij.onrender.com';
   }
 
   // If already absolute HTTP/HTTPS URL
@@ -471,11 +471,7 @@ export const formatImageUrl = (url: string | undefined | null): string => {
       return clean.replace(/^https?:\/\/[^/]+/, backend);
     }
     if (clean.includes('vendor.ficapp.in')) {
-      let httpsUrl = clean.replace(/^http:\/\//, 'https://');
-      if (httpsUrl.includes('vendor.ficapp.in/uploads/') && !httpsUrl.includes('vendor.ficapp.in/api/uploads/')) {
-        httpsUrl = httpsUrl.replace('vendor.ficapp.in/uploads/', 'vendor.ficapp.in/api/uploads/');
-      }
-      return httpsUrl;
+      return clean.replace(/^https?:\/\/vendor\.ficapp\.in/, backend);
     }
     return clean;
   }

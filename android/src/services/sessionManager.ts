@@ -108,7 +108,7 @@ class SessionManager {
    */
   async validateSession(token: string): Promise<SessionValidationResult> {
     const baseUrl = Platform.OS === 'android' ? API_URL_ANDROID : API_URL_IOS;
-    const url = `${baseUrl || 'https://vendor.ficapp.in/api'}/vendor/profile`;
+    const url = `${baseUrl || 'https://connect-vendor-p1ij.onrender.com/api'}/vendor/profile`;
 
     const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
     const timeoutId = controller ? setTimeout(() => controller.abort(), 12000) : null;
